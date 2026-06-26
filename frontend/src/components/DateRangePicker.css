@@ -1,0 +1,276 @@
+.drp { position: relative; display: inline-block; }
+
+.drp-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.drp-trigger:hover, .drp-trigger.active { border-color: var(--accent); }
+.drp-trigger.has-value { color: var(--text); border-color: var(--accent); }
+.drp-icon  { font-size: 14px; }
+.drp-label { flex: 1; }
+.drp-clear { color: var(--text-faint); font-size: 11px; padding: 2px 4px; border-radius: 2px; cursor: pointer; }
+.drp-clear:hover { color: var(--red); background: rgba(239,68,68,0.1); }
+
+/* Popup */
+.drp-popup {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 1000;
+  background: var(--bg-card);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  width: 300px;
+  padding: 14px;
+  box-sizing: border-box;
+}
+
+/* Quick buttons */
+.drp-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.drp-quick-btn {
+  padding: 4px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.drp-quick-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(249,115,22,0.08); }
+
+.drp-divider { height: 1px; background: var(--border); margin: 10px 0; }
+
+/* Step hint */
+.drp-step-hint {
+  text-align: center;
+  min-height: 22px;
+  margin-bottom: 8px;
+}
+.drp-step {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.drp-step.active {
+  color: var(--accent);
+  background: rgba(249,115,22,0.1);
+  border: 1px solid rgba(249,115,22,0.3);
+}
+.drp-step.done {
+  color: var(--text);
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  font-size: 10px;
+}
+
+/* Calendar */
+.drp-calendar {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.drp-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.drp-nav-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 18px;
+  padding: 2px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 1;
+}
+.drp-nav-btn:hover { background: var(--bg-hover); color: var(--text); }
+.drp-month-year { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--text); }
+
+.drp-days-header {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  margin-bottom: 4px;
+  width: 100%;
+}
+.drp-day-name {
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 4px 0;
+}
+
+.drp-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  width: 100%;
+}
+
+.drp-day {
+  width: 100%;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 12px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  background: none;
+  color: var(--text-dim);
+  transition: all 0.1s;
+  box-sizing: border-box;
+  padding: 0;
+}
+.drp-day-empty {
+  width: 100%;
+  aspect-ratio: 1;
+}
+.drp-day:hover         { background: var(--bg-hover); color: var(--text); }
+.drp-day.is-today      { color: var(--accent); font-weight: 600; }
+.drp-day.in-range      { background: rgba(249,115,22,0.12); color: var(--text); }
+.drp-day.is-from,
+.drp-day.is-to         { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* Times */
+.drp-times {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.drp-time-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+.drp-time-group label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.drp-time-group input[type="time"] {
+  font-size: 13px;
+  font-family: var(--mono);
+  padding: 6px 8px;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+}
+.drp-time-preview {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--accent);
+  margin-top: 2px;
+}
+
+/* Actions */
+.drp-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.drp-btn-clear {
+  flex: 1;
+  padding: 7px 12px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.drp-btn-clear:hover { border-color: var(--red); color: var(--red); }
+.drp-btn-apply {
+  flex: 2;
+  padding: 7px 12px;
+  background: var(--accent);
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.drp-btn-apply:hover:not(:disabled) { opacity: 0.85; }
+.drp-btn-apply:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* Time number inputs */
+.drp-time-inputs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.drp-time-num {
+  width: 48px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 600;
+  padding: 6px 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  box-sizing: border-box;
+}
+.drp-time-num:focus { border-color: var(--accent); outline: none; }
+.drp-time-sep {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.drp-time-sel {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 5px 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  text-align: center;
+  cursor: pointer;
+}
+.drp-time-sel:focus { border-color: var(--accent); outline: none; }

@@ -1,0 +1,59 @@
+/* Event card */
+.event-card {
+  margin: 16px 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 20px;
+}
+
+.event-card-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.badge-event {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.event-ts {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.event-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px 24px;
+}
+
+.event-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.event-field .field-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.event-field .field-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}

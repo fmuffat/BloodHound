@@ -1,0 +1,115 @@
+services:
+
+  # ── MongoDB (metadata Graylog) ──────────────────────────────────────────────
+  mongodb:
+    image: mongo:7
+    container_name: syslog_mongodb
+    restart: unless-stopped
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - syslog_net
+
+  # ── OpenSearch (index des logs) ────────────────────────────────────────────
+  opensearch:
+    image: opensearchproject/opensearch:1.3.14
+    container_name: syslog_opensearch
+    restart: unless-stopped
+    environment:
+      - cluster.name=syslog-cluster
+      - node.name=opensearch-node1
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+      - plugins.security.disabled=true          # désactivé en environnement de démo
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - syslog_net
+
+  # ── Graylog ────────────────────────────────────────────────────────────────
+  graylog:
+    image: graylog/graylog:7.1.2
+    container_name: syslog_graylog
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+      - opensearch
+    environment:
+      # Mot de passe admin : changer en prod
+      # Générer le hash : echo -n "yourpassword" | sha256sum
+      GRAYLOG_PASSWORD_SECRET: "somepasswordsecret1234567890abcdef"
+      GRAYLOG_ROOT_PASSWORD_SHA2: "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"  # admin
+      GRAYLOG_HTTP_EXTERNAL_URI: "http://localhost:9000/"
+      GRAYLOG_MONGODB_URI: "mongodb://mongodb:27017/graylog"
+      GRAYLOG_ELASTICSEARCH_HOSTS: "http://opensearch:9200"
+      GRAYLOG_ELASTICSEARCH_VERSION: "7"
+      # Timezone
+      GRAYLOG_ROOT_TIMEZONE: "Europe/Paris"
+    ports:
+      - "9000:9000"       # Interface web Graylog
+      - "514:514/udp"     # Syslog UDP (APs Ruckus)
+      - "514:514/tcp"     # Syslog TCP
+      - "12201:12201/udp" # GELF UDP (optionnel)
+    volumes:
+      - graylog_data:/usr/share/graylog/data
+    networks:
+      - syslog_net
+
+  # ── Redis (cache Ruckus One : MAC → client_name, username, ap_name) ────────
+  redis:
+    image: redis:7-alpine
+    container_name: syslog_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - syslog_net
+
+  # ── Backend FastAPI ────────────────────────────────────────────────────────
+  backend:
+    build: ./backend
+    container_name: syslog_backend
+    restart: unless-stopped
+    depends_on:
+      - graylog
+      - redis
+    environment:
+      GRAYLOG_API_URL: "http://graylog:9000/api"
+      GRAYLOG_USER: "admin"
+      GRAYLOG_PASSWORD: "admin"
+      REDIS_URL: "redis://redis:6379"
+      RUCKUS_ONE_TENANT_ID: "${RUCKUS_ONE_TENANT_ID}"
+      RUCKUS_ONE_REGION: "EU"
+      RUCKUS_ONE_CLIENT_ID: "${RUCKUS_ONE_CLIENT_ID}"
+      RUCKUS_ONE_CLIENT_SECRET: "${RUCKUS_ONE_CLIENT_SECRET}"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    networks:
+      - syslog_net
+
+  # ── Frontend React ─────────────────────────────────────────────────────────
+
+volumes:
+  mongodb_data:
+  opensearch_data:
+  graylog_data:
+  redis_data:
+
+networks:
+  syslog_net:
+    driver: bridge

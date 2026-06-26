@@ -1,0 +1,39 @@
+# Secrets — never commit real credentials
+.env
+backend/.env
+*.env
+!.env.example
+
+# SSL certificates (regenerated per-deployment)
+ssl/
+*.crt
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Selenium / webdriver-manager caches
+.wdm/
+
+# Logs
+*.log
+logs/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Backups produced by clear-logs.sh / factory-reset.sh
+*.tar.gz

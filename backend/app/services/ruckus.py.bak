@@ -1,0 +1,330 @@
+"""
+Ruckus One API client — Europe region
+Syncs to Redis:
+  - connected clients : MAC → {hostname, username, os_type, device_type, venue, ap_name, ssid, is_guest}
+  - guests            : MAC → {guest_name, email, phone}
+  - aliases           : MAC → {alias}
+  - wlans             : wlan_id → {ssid, is_guest}
+  - venues            : venue_id → {name}
+"""
+
+import json
+import logging
+from datetime import datetime, timezone
+
+import httpx
+
+from app.config import settings
+from app.services.cache import get_redis, set_ruckus_token, get_ruckus_token
+
+log = logging.getLogger(__name__)
+
+BASE_URL = "https://api.eu.ruckus.cloud"
+AUTH_URL = f"https://eu.ruckus.cloud/oauth2/token/{settings.ruckus_one_tenant_id}"
+
+HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+}
+
+# ── Authentication ────────────────────────────────────────────────────────────
+
+async def _get_token() -> str:
+    cached = await get_ruckus_token()
+    if cached:
+        return cached
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.post(
+            AUTH_URL,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": settings.ruckus_one_client_id,
+                "client_secret": settings.ruckus_one_client_secret,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        r.raise_for_status()
+        data = r.json()
+        token = data["access_token"]
+        expires_in = data.get("expires_in", 3600)
+        await set_ruckus_token(token, ttl=expires_in - 60)
+        return token
+
+
+async def _auth_headers() -> dict:
+    token = await _get_token()
+    return {**HEADERS, "Authorization": f"Bearer {token}"}
+
+
+async def _post(path: str, body: dict = None) -> dict:
+    headers = await _auth_headers()
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(f"{BASE_URL}{path}", headers=headers, json=body or {})
+        if r.status_code == 401:
+            # Token expired — force refresh
+            redis = await get_redis()
+            await redis.delete("ruckus:token")
+            headers = await _auth_headers()
+            r = await client.post(f"{BASE_URL}{path}", headers=headers, json=body or {})
+        r.raise_for_status()
+        return r.json()
+
+
+async def _get(path: str) -> tuple[int, dict]:
+    token = await _get_token()
+    # Ruckus One GET endpoints require vnd content-type header
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/vnd.ruckus.v1+json",
+    }
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.get(f"{BASE_URL}{path}", headers=headers)
+        return r.status_code, r.json() if r.text else {}
+
+
+def _extract_list(data: dict) -> list:
+    """Extract list from Ruckus One response (handles list, content, data formats)."""
+    return data.get("list", data.get("content", data.get("data", [])))
+
+
+# ── WLAN sync ─────────────────────────────────────────────────────────────────
+
+GUEST_SUBTYPES = {"guestpass", "wispr", "otp", "guest"}
+
+
+async def sync_wlans() -> int:
+    """Sync all WiFi networks and flag guest networks."""
+    log.info("Syncing WLANs...")
+    data = await _post("/wifiNetworks/query", {})
+    networks = _extract_list(data)
+    redis = await get_redis()
+    count = 0
+
+    for n in networks:
+        wlan_id = n.get("id", "")
+        if not wlan_id:
+            continue
+        ssid = n.get("ssid") or n.get("name", "")
+        subtype = n.get("nwSubType", "").lower()
+        is_guest = (
+            subtype in GUEST_SUBTYPES
+            or "guest" in ssid.lower()
+            or "guest" in n.get("name", "").lower()
+        )
+        info = {"ssid": ssid, "is_guest": is_guest, "subtype": subtype}
+        await redis.setex(f"ruckus:wlan:{wlan_id}", 3600, json.dumps(info))
+        count += 1
+
+    log.info(f"WLANs synced: {count}")
+    return count
+
+
+# ── Venue sync ────────────────────────────────────────────────────────────────
+
+async def sync_venues() -> int:
+    """Sync all venues."""
+    log.info("Syncing venues...")
+    data = await _post("/venues/query", {})
+    venues = _extract_list(data)
+    redis = await get_redis()
+    count = 0
+
+    for v in venues:
+        venue_id = v.get("id", "")
+        if not venue_id:
+            continue
+        info = {
+            "name":    v.get("name", ""),
+            "city":    v.get("city", ""),
+            "country": v.get("country", ""),
+        }
+        await redis.setex(f"ruckus:venue:{venue_id}", 3600, json.dumps(info))
+        count += 1
+
+    log.info(f"Venues synced: {count}")
+    return count
+
+
+# ── Connected clients sync ────────────────────────────────────────────────────
+
+async def sync_clients() -> int:
+    """
+    Sync all currently connected clients.
+    TTL is short (10 min) since clients connect/disconnect frequently.
+    """
+    log.info("Syncing connected clients...")
+    data = await _post("/venues/aps/clients/query", {})
+    clients = _extract_list(data)
+    redis = await get_redis()
+    count = 0
+
+    for c in clients:
+        mac = c.get("macAddress", "").lower()
+        if not mac:
+            continue
+
+        # Check if client is on a guest network
+        wlan_id = c.get("networkInformation", {}).get("id", "")
+        wlan_raw = await redis.get(f"ruckus:wlan:{wlan_id}")
+        wlan_info = json.loads(wlan_raw) if wlan_raw else {}
+        is_guest = wlan_info.get("is_guest", False)
+
+        info = {
+            "hostname":    c.get("hostname", mac),
+            "username":    c.get("username", ""),
+            "os_type":     c.get("osType", ""),
+            "device_type": c.get("deviceType", ""),
+            "model":       c.get("modelName", ""),
+            "venue":       c.get("venueInformation", {}).get("name", ""),
+            "ap_name":     c.get("apInformation", {}).get("name", ""),
+            "ssid":        c.get("networkInformation", {}).get("ssid", ""),
+            "wlan_id":     wlan_id,
+            "is_guest":    is_guest,
+            "ip":          c.get("ipAddress", ""),
+            "band":        c.get("band", ""),
+            "synced_at":   datetime.now(timezone.utc).isoformat(),
+        }
+        await redis.setex(f"ruckus:mac:{mac}", 600, json.dumps(info))
+
+	# Store ap_name -> venue mapping for log enrichment
+        ap_name = c.get("apInformation", {}).get("name", "")
+        venue   = c.get("venueInformation", {}).get("name", "")
+        if ap_name and venue:
+            await redis.setex(f"ruckus:ap_venue:{ap_name}", 86400, venue)
+        count += 1
+
+    log.info(f"Clients synced: {count}")
+    return count
+
+
+# ── Guest users sync ──────────────────────────────────────────────────────────
+
+async def sync_guests() -> int:
+    """
+    Sync guest users and merge with MAC entries when devicesMac is populated.
+    Guest info is stored separately by guest_id for future lookups.
+    """
+    log.info("Syncing guest users...")
+    data = await _post("/guestUsers/query", {})
+    guests = _extract_list(data)
+    redis = await get_redis()
+    count = 0
+
+    for g in guests:
+        macs = g.get("devicesMac", [])
+        guest_info = {
+            "guest_name": g.get("name", ""),
+            "email":      g.get("emailAddress", ""),
+            "phone":      g.get("mobilePhoneNumber", ""),
+            "ssid":       g.get("ssid", ""),
+            "status":     g.get("guestStatus", ""),
+            "is_guest":   True,
+        }
+
+        # Merge guest info into existing MAC entry
+        for mac in macs:
+            mac = mac.lower()
+            existing_raw = await redis.get(f"ruckus:mac:{mac}")
+            existing = json.loads(existing_raw) if existing_raw else {}
+            existing.update(guest_info)
+            await redis.setex(f"ruckus:mac:{mac}", 600, json.dumps(existing))
+            count += 1
+
+        # Store by guest_id for future MAC-less lookups
+        guest_id = g.get("id", "")
+        if guest_id:
+            await redis.setex(f"ruckus:guest:{guest_id}", 3600, json.dumps(guest_info))
+
+    log.info(f"Guests synced: {count} (with MAC address)")
+    return count
+
+
+# ── Alias sync ────────────────────────────────────────────────────────────────
+
+async def sync_aliases() -> int:
+    """Sync all client aliases and merge into MAC entries."""
+    log.info("Syncing client aliases...")
+    data = await _post("/clients/aliases/query", {})
+    aliases = data.get("content", [])
+    redis = await get_redis()
+    count = 0
+
+    for a in aliases:
+        mac = a.get("macAddress", "").lower()
+        if not mac:
+            continue
+        existing_raw = await redis.get(f"ruckus:mac:{mac}")
+        existing = json.loads(existing_raw) if existing_raw else {}
+        existing["alias"] = a.get("alias", "")
+        await redis.setex(f"ruckus:mac:{mac}", 600, json.dumps(existing))
+        count += 1
+
+    log.info(f"Aliases synced: {count}")
+    return count
+
+
+# ── On-demand MAC lookup ──────────────────────────────────────────────────────
+
+async def lookup_mac(mac: str) -> dict | None:
+    """
+    Immediate lookup for an unknown MAC address.
+    Called when a MAC is seen in logs but not in Redis cache.
+    """
+    mac = mac.lower()
+    redis = await get_redis()
+
+    # Check cache first
+    cached = await redis.get(f"ruckus:mac:{mac}")
+    if cached:
+        return json.loads(cached)
+
+    # Try alias endpoint
+    status, data = await _get(f"/clients/aliases/{mac}")
+    if status == 200:
+        alias_info = {"alias": data.get("alias", ""), "mac": mac}
+        await redis.setex(f"ruckus:mac:{mac}", 300, json.dumps(alias_info))
+        return alias_info
+
+    return None
+
+
+# ── Client label helper ───────────────────────────────────────────────────────
+
+def get_client_label(info: dict) -> str:
+    """
+    Returns the best available display name for a client:
+    alias > guest_name > hostname > MAC
+    """
+    if info.get("alias"):
+        return info["alias"]
+    if info.get("guest_name"):
+        return info["guest_name"]
+    hostname = info.get("hostname", "")
+    mac = info.get("mac", "")
+    if hostname and hostname != mac:
+        return hostname
+    return mac or "Unknown"
+
+
+# ── Full sync entry point ─────────────────────────────────────────────────────
+
+async def full_sync() -> dict:
+    """Full sync — called at startup and every 5 minutes."""
+    results = {}
+    try:
+        results["wlans"]   = await sync_wlans()
+        results["venues"]  = await sync_venues()
+        results["clients"] = await sync_clients()
+        results["guests"]  = await sync_guests()
+        results["aliases"] = await sync_aliases()
+
+        redis = await get_redis()
+        await redis.set("ruckus:last_sync", datetime.now(timezone.utc).isoformat())
+        log.info(f"Full sync complete: {results}")
+    except Exception as e:
+        log.error(f"Full sync failed: {e}")
+        results["error"] = str(e)
+
+    return results
