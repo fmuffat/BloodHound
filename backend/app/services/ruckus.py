@@ -489,11 +489,16 @@ async def full_sync() -> dict:
         results["aliases"] = await sync_aliases()
 
         redis = await get_redis()
-        # One snapshot per client, from its final merged state
-        for mac in _synced_macs:
-            raw = await redis.get(f"ruckus:mac:{mac}")
-            if raw:
-                await write_snapshot(mac, json.loads(raw), source="ruckus_one")
+        # One snapshot per client, from its final merged state. History is
+        # best-effort: OpenSearch being unavailable (e.g. still starting)
+        # must not fail the sync itself — the live cache is already written.
+        try:
+            for mac in _synced_macs:
+                raw = await redis.get(f"ruckus:mac:{mac}")
+                if raw:
+                    await write_snapshot(mac, json.loads(raw), source="ruckus_one")
+        except Exception as e:
+            log.warning(f"History snapshots skipped this cycle: {e}")
 
         await redis.set("ruckus:last_sync", datetime.now(timezone.utc).isoformat())
         log.info(f"Full sync complete: {results}")

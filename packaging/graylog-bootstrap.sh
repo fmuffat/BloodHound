@@ -24,7 +24,7 @@ for i in $(seq 1 120); do
 done
 
 python3 - "graylog/extract_ruckus_5tuple.rule" <<'PYEOF'
-import base64, json, os, sys, urllib.request
+import base64, json, os, sys, urllib.error, urllib.request
 
 API, AUTH = os.environ["GL_API"], os.environ["GL_AUTH"]
 RULE_SOURCE = open(sys.argv[1]).read()
@@ -41,9 +41,12 @@ def call(method, path, body=None):
     req.add_header("X-Requested-By", "bloodhound")
     req.add_header("Content-Type", "application/json")
     req.add_header("Accept", "application/json")
-    with urllib.request.urlopen(req, timeout=60) as r:
-        raw = r.read()
-        return json.loads(raw) if raw else {}
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            raw = r.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        sys.exit(f"  Graylog API {method} {path}: HTTP {e.code} {e.read().decode(errors='replace')[:500]}")
 
 
 # ── Input ────────────────────────────────────────────────────────────────────
@@ -95,7 +98,8 @@ streams = call("GET", "/streams")["streams"]
 stream = next((s for s in streams if s["title"] == STREAM_TITLE), None)
 if stream is None:
     index_set = next(s for s in call("GET", "/system/indices/index_sets")["index_sets"] if s["default"])
-    created = call("POST", "/streams", {
+    # Graylog 6+: the stream goes in an "entity" wrapper (CreateEntityRequest)
+    created = call("POST", "/streams", {"entity": {
         "title": STREAM_TITLE,
         "description": "Ruckus AP 5-tuple flow logs (parsed by the Ruckus AP Processing pipeline)",
         "rules": [{"field": "message", "type": 6, "value": "Ruckus-AP New Flow",
@@ -103,7 +107,7 @@ if stream is None:
         "matching_type": "AND",
         "remove_matches_from_default_stream": True,
         "index_set_id": index_set["id"],
-    })
+    }})
     stream_id = created["stream_id"]
     call("POST", f"/streams/{stream_id}/resume")
     print(f"  stream created and started: {STREAM_TITLE}")
