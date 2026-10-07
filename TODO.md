@@ -35,7 +35,7 @@ Priority: **P1** = needed soon, **P2** = strong value, **P3** = later.
 ## Appliance / OVA
 - [ ] P1 Test the OVA from the "Package and OVA" workflow on ESXi (first boot
       assistant, web login, syslog from a real AP, console menu, data disk).
-- [ ] P1 Merge `remove-gdpr-wording` into `ova/appliance` and rebuild the OVA.
+- [x] P1 Merge `remove-gdpr-wording` into `ova/appliance` and rebuild the OVA.
 - [ ] P1 Merge `ova/appliance` (includes `fix/security-hardening`) into `main`
       once the OVA is validated; tag `v1.1.0` → GitHub Release.
 - [ ] P2 Backup / restore from the console menu and the web interface

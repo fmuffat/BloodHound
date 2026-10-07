@@ -121,12 +121,13 @@ jobs:
           sudo qemu-img create -q -f qcow2 -b system.qcow2 -F qcow2 boot-test.qcow2
           sudo qemu-img create -q -f qcow2 data-test.qcow2 150G
           printf '%s\n' NETWORK=dhcp HOSTNAME_NEW=bh-ci TIMEZONE=Europe/Paris \
-            "ADMIN_PASSWORD='Ci-admin-12345'" "WEB_PASSWORD='Ci-web-12345'" > setup.conf
-          sudo virt-customize -q -a boot-test.qcow2 --no-network --copy-in setup.conf:/etc/bloodhound
+            "ADMIN_PASSWORD='Ci-admin-12345'" "WEB_PASSWORD='Ci-web-12345'" > "$RUNNER_TEMP/setup.conf"
+          # (written in the runner's temp dir: /mnt/ova-build belongs to root)
+          sudo virt-customize -q -a boot-test.qcow2 --no-network --copy-in "$RUNNER_TEMP/setup.conf:/etc/bloodhound"
           sudo qemu-system-x86_64 -enable-kvm -cpu host -m 8192 -smp 4 \
             -drive file=boot-test.qcow2,if=virtio -drive file=data-test.qcow2,if=virtio \
             -nic user,model=virtio-net-pci,hostfwd=tcp::8443-:443,hostfwd=udp::5514-:514 \
-            -display none -serial file:serial.log -daemonize -pidfile qemu.pid
+            -display none -serial file:/mnt/ova-build/serial.log -daemonize -pidfile /mnt/ova-build/qemu.pid
           for i in $(seq 1 180); do
             code="$(curl -sk -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
               -d '{"username":"bloodhound","password":"Ci-web-12345"}' https://127.0.0.1:8443/api/v1/auth/login || true)"
@@ -142,8 +143,8 @@ jobs:
         if: failure()
         run: |
           cd /mnt/ova-build
-          [ -f qemu.pid ] && sudo kill "$(cat qemu.pid)" && sleep 5 || true
-          tail -60 serial.log 2>/dev/null || true
+          [ -f qemu.pid ] && sudo kill "$(sudo cat qemu.pid)" && sleep 5 || true
+          sudo tail -60 serial.log 2>/dev/null || true
           [ -f boot-test.qcow2 ] && sudo virt-cat -a boot-test.qcow2 /var/log/bloodhound-setup.log | tail -80 || true
       - uses: actions/upload-artifact@v4
         with:
