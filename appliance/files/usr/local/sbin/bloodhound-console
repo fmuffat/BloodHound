@@ -1,0 +1,46 @@
+#!/bin/bash
+# Bloodhound appliance console menu:  sudo bloodhound-console
+set -u
+. /usr/local/lib/bloodhound/common.sh
+[ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+export TERM="${TERM:-linux}"
+compose() { (cd "$BH_DIR" && docker compose "$@"); }
+
+while :; do
+  IP="$(current_ip)"
+  c=$(whiptail --title "$TITLE" --menu "Web interface: https://$IP/\nHost: $(hostname)   Version: $(cat $BH_DIR/VERSION 2>/dev/null)" 22 76 12 \
+    status    "Application status" \
+    network   "Change the network configuration" \
+    webpass   "Set a new password for the web user \"bloodhound\"" \
+    graylog   "Show the Graylog admin password (UI via SSH tunnel)" \
+    retention "Disk usage" \
+    restart   "Restart the application" \
+    logs      "Last backend logs" \
+    shell     "Open a shell (exit to come back)" \
+    reboot    "Reboot the appliance" \
+    poweroff  "Shut down the appliance" \
+    quit      "Leave this menu" 3>&1 1>&2 2>&3) || exit 0
+  case "$c" in
+    status)
+      out="$(compose ps --format '{{.Service}}: {{.State}} {{.Status}}' 2>&1)"
+      h="$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1/api/v1/auth/me)"
+      info "Services:\n$out\n\nWeb/API: $( [ "$h" = 401 ] || [ "$h" = 200 ] && echo OK || echo "NOT OK ($h)")\nSyslog: send to $IP UDP 514" 22 ;;
+    network)
+      configure_network && refresh_certificate && /usr/local/sbin/bloodhound-issue && info "New address: https://$(current_ip)/" 8 ;;
+    webpass)
+      pw="$(ask_new_password 'New password of the web user "bloodhound"' 8)" || continue
+      if set_web_password "$pw"; then info "Password changed. All web sessions were closed." 8
+      else info "Failed — details in $LOG" 8; fi
+      unset pw ;;
+    graylog)
+      info "Graylog UI (from your workstation):\n\n  ssh -L 9000:localhost:9000 admin@$IP\n  then http://localhost:9000\n\nUser:     admin\nPassword: $(grep '^GRAYLOG_PASSWORD=' "$BH_DIR/.env" | cut -d= -f2-)" 16 ;;
+    retention)
+      info "$(df -h / /data 2>/dev/null | awk 'NR==1 || /\/$|\/data$/')\n\nLog retention is set in the web interface:\nSettings → System → Log Retention." 14 ;;
+    restart)  compose restart >/dev/null 2>&1; info "Application restarted." 8 ;;
+    logs)     compose logs --tail 40 --no-color backend > /tmp/bh-logs.txt 2>&1; whiptail --title "$TITLE" --textbox /tmp/bh-logs.txt 24 100 --scrolltext; rm -f /tmp/bh-logs.txt ;;
+    shell)    clear; echo "Type 'exit' to come back to the menu."; bash -l ;;
+    reboot)   yesno "Reboot now?" && reboot ;;
+    poweroff) yesno "Shut down now?" && poweroff ;;
+    quit)     clear; exit 0 ;;
+  esac
+done

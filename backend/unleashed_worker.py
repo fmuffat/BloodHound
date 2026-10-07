@@ -147,6 +147,13 @@ def get_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--log-level=3")
 
+    # In the backend Docker image (appliance): Debian's chromium + chromedriver
+    # are installed side by side and always version-matched — use them
+    # directly, no download (the appliance may have no Internet access).
+    if os.path.exists("/usr/bin/chromedriver") and os.path.exists("/usr/bin/chromium"):
+        options.binary_location = "/usr/bin/chromium"
+        return webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=options)
+
     # Prefer a real (non-Snap) browser binary. google-chrome is checked
     # first since it's the one we explicitly install for this purpose;
     # the Snap-wrapped chromium paths are kept as a last-resort fallback

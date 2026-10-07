@@ -1,0 +1,10 @@
+# Unattended first-boot setup: copy to /etc/bloodhound/setup.conf before the first boot.
+NETWORK=dhcp                 # or static
+#ADDRESS=192.168.10.50/24    # static only
+#GATEWAY=192.168.10.1
+#DNS=192.168.10.1,1.1.1.1
+HOSTNAME_NEW=bloodhound
+TIMEZONE=Europe/Paris
+NTP="pool.ntp.org"
+#ADMIN_PASSWORD='...'        # system account "admin" (stays locked when unset)
+#WEB_PASSWORD='...'          # web user "bloodhound" (default "password" when unset)

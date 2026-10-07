@@ -1,0 +1,12 @@
+[Unit]
+Description=Bloodhound console welcome screen and SSH host keys
+After=network-online.target
+Wants=network-online.target
+Before=getty@tty1.service ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bloodhound-issue
+
+[Install]
+WantedBy=multi-user.target

@@ -9,3 +9,6 @@
 *.conf     text eol=lf
 *.yml      text eol=lf
 Dockerfile text eol=lf
+*.rule     text eol=lf
+*.yaml     text eol=lf
+appliance/files/** text eol=lf

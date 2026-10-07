@@ -1,0 +1,8 @@
+# Default network of the appliance: DHCP on every Ethernet interface.
+# Replaced by /etc/netplan/50-bloodhound.yaml once the setup assistant has run.
+network:
+  version: 2
+  ethernets:
+    all-ethernet:
+      match: {name: "e*"}
+      dhcp4: true

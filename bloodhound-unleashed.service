@@ -12,7 +12,7 @@ WorkingDirectory=/opt/bloodhound/syslog-platform
 EnvironmentFile=-/opt/bloodhound/syslog-platform/backend/.env
 Environment="REDIS_URL=redis://127.0.0.1:6379"
 Environment="UNLEASHED_SYNC_INTERVAL=300"
-ExecStart=/usr/bin/python3 /opt/bloodhound/syslog-platform/unleashed_worker.py --daemon
+ExecStart=/usr/bin/python3 /opt/bloodhound/syslog-platform/backend/unleashed_worker.py --daemon
 Restart=always
 RestartSec=30
 

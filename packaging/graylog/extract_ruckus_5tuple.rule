@@ -1,0 +1,26 @@
+rule "extract_ruckus_5tuple"
+when
+    contains(value: to_string($message.message), search: "Ruckus-AP New Flow")
+then
+    let msg = to_string($message.message);
+    let m1 = regex(pattern: "Src_IP...([0-9a-fA-F:.]+)", value: msg);
+    set_field(field: "src_ip", value: m1["0"]);
+    let m2 = regex(pattern: "Dst_IP...([0-9a-fA-F:.]+)", value: msg);
+    set_field(field: "dst_ip", value: m2["0"]);
+    let m3 = regex(pattern: "Src_port...([0-9]+)", value: msg);
+    set_field(field: "src_port", value: to_long(value: m3["0"]));
+    let m4 = regex(pattern: "Dst_port...([0-9]+)", value: msg);
+    set_field(field: "dst_port", value: to_long(value: m4["0"]));
+    let m5 = regex(pattern: "L4protocol...([A-Za-z]+)", value: msg);
+    set_field(field: "proto", value: m5["0"]);
+    let m6 = regex(pattern: "Src_MAC...([0-9a-fA-F:]+)", value: msg);
+    set_field(field: "client_mac", value: to_string(value: m6["0"]));
+    let m7 = regex(pattern: "apName...([^,\"]+)", value: msg);
+    set_field(field: "ap_name", value: m7["0"]);
+    let m8 = regex(pattern: "apMac...([0-9a-fA-F:]+)", value: msg);
+    set_field(field: "ap_mac", value: to_string(value: m8["0"]));
+    let m9 = regex(pattern: "wlanName...([^,\"]+)", value: msg);
+    set_field(field: "wlan_id", value: m9["0"]);
+    let m10 = regex(pattern: "zoneName...([^,\"]+)", value: msg);
+    set_field(field: "zone_name", value: m10["0"]);
+end

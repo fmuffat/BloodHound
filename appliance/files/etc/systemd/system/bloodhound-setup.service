@@ -1,0 +1,21 @@
+[Unit]
+Description=Bloodhound first-boot setup (console assistant on tty1)
+After=network-online.target bloodhound-issue.service
+Wants=network-online.target
+Before=getty@tty1.service
+ConditionPathExists=!/etc/bloodhound/configured
+
+[Service]
+Type=oneshot
+Environment=BH_TTY=/dev/tty1
+ExecStart=/usr/local/sbin/bloodhound-setup
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=tty
+TTYReset=yes
+TTYVHangup=yes
+RemainAfterExit=no
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

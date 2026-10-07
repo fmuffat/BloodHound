@@ -1,0 +1,122 @@
+# Bloodhound appliance (installed by install.sh; images loaded from the package).
+# Manage with:  cd /opt/bloodhound && sudo docker compose ps | logs -f | restart
+#
+# Exposed on the LAN: 443/80 (web UI + API, via the "web" container) and 514
+# udp/tcp (syslog from the APs). Graylog, OpenSearch, Redis and the backend
+# are reachable only inside the Docker network — Graylog's UI is published on
+# 127.0.0.1:9000 for an SSH tunnel (see QUICKSTART.md).
+name: bloodhound
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "20m", max-file: "5" }
+
+services:
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongodb-data:/data/db
+    logging: *logging
+
+  opensearch:
+    image: opensearchproject/opensearch:1.3.14
+    restart: unless-stopped
+    environment:
+      - cluster.name=bloodhound
+      - node.name=opensearch-node1
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms${OPENSEARCH_HEAP:-2g} -Xmx${OPENSEARCH_HEAP:-2g}
+      # No auth: never published outside the Docker network
+      - plugins.security.disabled=true
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    logging: *logging
+
+  graylog:
+    image: graylog/graylog:7.1.2
+    restart: unless-stopped
+    depends_on: [mongodb, opensearch]
+    environment:
+      GRAYLOG_PASSWORD_SECRET: ${GRAYLOG_PASSWORD_SECRET:?missing in .env}
+      GRAYLOG_ROOT_PASSWORD_SHA2: ${GRAYLOG_ROOT_PASSWORD_SHA2:?missing in .env}
+      GRAYLOG_HTTP_EXTERNAL_URI: "http://localhost:9000/"
+      GRAYLOG_MONGODB_URI: "mongodb://mongodb:27017/graylog"
+      GRAYLOG_ELASTICSEARCH_HOSTS: "http://opensearch:9200"
+      GRAYLOG_ELASTICSEARCH_VERSION: "7"
+      GRAYLOG_ROOT_TIMEZONE: ${APP_TIMEZONE:-UTC}
+    # Graylog runs as a non-root user: allow it to bind the syslog port 514
+    # inside its own network namespace.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    ports:
+      - "127.0.0.1:9000:9000"   # Graylog UI — SSH tunnel only
+      - "514:514/udp"           # Syslog from the APs
+      - "514:514/tcp"
+    volumes:
+      - graylog-data:/usr/share/graylog/data
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    logging: *logging
+
+  backend:
+    image: bloodhound/backend:${APP_VERSION:?missing in .env}
+    restart: unless-stopped
+    depends_on: [graylog, redis]
+    environment:
+      GRAYLOG_API_URL: "http://graylog:9000/api"
+      GRAYLOG_USER: "admin"
+      GRAYLOG_PASSWORD: ${GRAYLOG_PASSWORD:?missing in .env}
+      REDIS_URL: "redis://redis:6379"
+      OPENSEARCH_URL: "http://opensearch:9200"
+      BLOODHOUND_SSL_DIR: /opt/bloodhound/ssl
+      TZ: ${APP_TIMEZONE:-UTC}
+    volumes:
+      - certs:/opt/bloodhound/ssl   # certificate installed from Settings → SSL
+    logging: *logging
+
+  # Unleashed has no REST API: this worker drives its web UI with headless
+  # Chromium and writes clients/APs/WLANs to Redis. Idle unless Unleashed is
+  # the active platform.
+  unleashed-worker:
+    image: bloodhound/backend:${APP_VERSION}
+    restart: unless-stopped
+    command: ["python", "/app/unleashed_worker.py", "--daemon"]
+    depends_on: [redis, opensearch]
+    environment:
+      REDIS_URL: "redis://redis:6379"
+      OPENSEARCH_URL: "http://opensearch:9200"
+      UNLEASHED_SYNC_INTERVAL: "300"
+    shm_size: "256m"
+    logging: *logging
+
+  web:
+    image: bloodhound/web:${APP_VERSION}
+    restart: unless-stopped
+    depends_on: [backend]
+    environment:
+      TLS_COMMON_NAME: ${TLS_COMMON_NAME:-bloodhound}
+      TLS_EXTRA_SAN: ${TLS_EXTRA_SAN:-}
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+    volumes:
+      - certs:/etc/nginx/certs
+    logging: *logging
+
+volumes:
+  mongodb-data:
+  opensearch-data:
+  graylog-data:
+  redis-data:
+  certs:

@@ -1,0 +1,127 @@
+#!/bin/bash
+# First-boot setup of the Bloodhound appliance, on the VM console (tty1).
+# Asks network, host name, time zone, NTP, the password of the "admin" system
+# account and of the web user "bloodhound", prepares the data disk, then
+# installs the application from /opt/bloodhound-package.
+# Runs once (state file /etc/bloodhound/configured). Unattended mode for tests
+# and mass deployment: put the answers in /etc/bloodhound/setup.conf (see the
+# template in that directory).
+set -u
+. /usr/local/lib/bloodhound/common.sh
+mkdir -p "$BH_STATE"
+[ -f "$BH_STATE/configured" ] && exit 0
+# The systemd unit runs it on tty1 (BH_TTY); "sudo bloodhound-setup" works from any terminal.
+# whiptail draws on stderr when its answer is captured: stderr must stay the terminal.
+if [ -n "${BH_TTY:-}" ]; then exec <"$BH_TTY" >"$BH_TTY" 2>&1; fi
+export TERM=linux NEWT_COLORS='root=,black window=,lightgray border=black,lightgray title=black,lightgray button=white,red actbutton=white,red'
+log "setup started"
+
+# The system disk of the OVA is small in the image; use all of its virtual size.
+grow_root() {
+  local part disk num
+  part="$(findmnt -no SOURCE /)"; disk="/dev/$(lsblk -no PKNAME "$part")"; num="${part##*[!0-9]}"
+  growpart "$disk" "$num" >>"$LOG" 2>&1 && resize2fs "$part" >>"$LOG" 2>&1
+}
+
+# Data disk: the first whole disk of 10 GB or more without partition table nor
+# file system, other than the system disk. Docker (and so all logs) lives there.
+prepare_data_disk() {
+  local sys d
+  sys="$(lsblk -no PKNAME "$(findmnt -no SOURCE /)")"
+  for d in $(lsblk -dbno NAME,TYPE,SIZE | awk '$2=="disk" && $3>=10737418240 {print $1}'); do
+    [ "$d" = "$sys" ] && continue
+    [ -n "$(lsblk -no FSTYPE "/dev/$d" | tr -d '[:space:]')" ] && continue
+    [ "$(lsblk -no NAME "/dev/$d" | wc -l)" -gt 1 ] && continue
+    mkfs.ext4 -q -L bh-data "/dev/$d" >>"$LOG" 2>&1 || { log "mkfs failed on /dev/$d"; continue; }
+    mkdir -p /data
+    echo "UUID=$(blkid -s UUID -o value "/dev/$d") /data ext4 defaults,noatime,nofail 0 2" >>/etc/fstab
+    systemctl daemon-reload; mount /data || return 1
+    mkdir -p /etc/docker /etc/systemd/system/docker.service.d
+    echo '{ "data-root": "/data/docker", "log-driver": "json-file", "log-opts": { "max-size": "20m", "max-file": "5" } }' >/etc/docker/daemon.json
+    printf '[Unit]\nRequiresMountsFor=/data\n' >/etc/systemd/system/docker.service.d/10-data-disk.conf
+    systemctl daemon-reload
+    log "data disk /dev/$d -> /data"
+    return 0
+  done
+  log "no empty data disk found: data on the system disk"
+  return 2
+}
+
+if [ -f "$BH_STATE/setup.conf" ]; then
+  # shellcheck disable=SC1091
+  . "$BH_STATE/setup.conf"
+  UNATTENDED=1
+else
+  UNATTENDED=0
+fi
+
+clear
+if [ "$UNATTENDED" = 0 ]; then
+  info "Welcome to the Bloodhound appliance.\n\nThis assistant configures the network, the host name, the time zone and the passwords, then installs the application.\n\nIt takes about 5 minutes." 14
+  until configure_network; do info "The network must be configured to continue." 8; done
+  HOSTNAME_NEW=$(ask "Host name" "bloodhound") || HOSTNAME_NEW=bloodhound
+  while :; do
+    TZ_NEW=$(ask "Time zone (e.g. Europe/Paris, Europe/Zurich, America/New_York, UTC)" "Europe/Paris") || TZ_NEW=UTC
+    [ -f "/usr/share/zoneinfo/$TZ_NEW" ] && break
+    info "Unknown time zone: $TZ_NEW" 8
+  done
+  NTP_NEW=$(ask "NTP servers (space separated; empty = Ubuntu default)" "pool.ntp.org") || NTP_NEW=""
+  # Both mandatory: the appliance never runs with a default password, and the
+  # "admin" account is the only way back into this console.
+  until ADMIN_PASSWORD="$(ask_new_password 'Password of the system account "admin" (console and SSH)' 10)"; do :; done
+  until WEB_PASSWORD="$(ask_new_password 'Password of the web user "bloodhound"' 8)"; do :; done
+else
+  if [ "${NETWORK:-dhcp}" = static ]; then
+    nic="$(primary_nic)"
+    printf 'network:\n  version: 2\n  ethernets:\n    %s:\n      dhcp4: false\n      addresses: [%s]\n      routes: [{to: default, via: %s}]\n      nameservers: {addresses: [%s]}\n' \
+      "$nic" "$ADDRESS" "$GATEWAY" "${DNS:-$GATEWAY}" >/etc/netplan/50-bloodhound.yaml
+    chmod 600 /etc/netplan/50-bloodhound.yaml; rm -f /etc/netplan/01-bloodhound-dhcp.yaml; netplan apply >>"$LOG" 2>&1; sleep 3
+  fi
+  HOSTNAME_NEW="${HOSTNAME_NEW:-bloodhound}"; TZ_NEW="${TIMEZONE:-UTC}"; NTP_NEW="${NTP:-}"
+  ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"; WEB_PASSWORD="${WEB_PASSWORD:-}"
+fi
+
+echo; echo "  Configuring the system..."
+# Files written directly: on the first boot systemd-hostnamed / timedated refuse the change.
+echo "$HOSTNAME_NEW" >/etc/hostname
+hostname "$HOSTNAME_NEW"
+sed -i "s/^127\.0\.1\.1.*/127.0.1.1 $HOSTNAME_NEW/" /etc/hosts; grep -q '^127\.0\.1\.1' /etc/hosts || echo "127.0.1.1 $HOSTNAME_NEW" >>/etc/hosts
+ln -sf "/usr/share/zoneinfo/$TZ_NEW" /etc/localtime
+echo "$TZ_NEW" >/etc/timezone
+if [ -n "$NTP_NEW" ]; then
+  mkdir -p /etc/systemd/timesyncd.conf.d
+  printf '[Time]\nNTP=%s\n' "$NTP_NEW" >/etc/systemd/timesyncd.conf.d/bloodhound.conf
+  systemctl restart systemd-timesyncd
+fi
+if [ -n "$ADMIN_PASSWORD" ]; then
+  echo "admin:$ADMIN_PASSWORD" | chpasswd && passwd -u admin >/dev/null
+fi
+unset ADMIN_PASSWORD
+log "host=$HOSTNAME_NEW tz=$TZ_NEW ntp=$NTP_NEW"
+
+echo "  Preparing the disks..."
+grow_root
+prepare_data_disk || true
+systemctl enable --now containerd docker >>"$LOG" 2>&1
+
+echo "  Installing Bloodhound (about 5 minutes)..."
+if (cd "$BH_PKG" && BH_DIR="$BH_DIR" BH_WAIT=1200 ./install.sh) >>"$LOG" 2>&1; then
+  rm -f "$BH_PKG/images.tar.gz"   # loaded into Docker; frees space on the system disk
+  if [ -n "$WEB_PASSWORD" ]; then
+    set_web_password "$WEB_PASSWORD" && WEB_MSG="the password you chose" || WEB_MSG="password (could not be changed — do it in Settings)"
+  else
+    WEB_MSG="password   (change it now: Settings → Password)"
+  fi
+  unset WEB_PASSWORD
+  touch "$BH_STATE/configured"
+  /usr/local/sbin/bloodhound-issue
+  log "setup done"
+  IP="$(current_ip)"
+  MSG="Bloodhound is ready.\n\nWeb interface:  https://$IP/\nUser:           bloodhound\nPassword:       $WEB_MSG\n\nThen, in Settings, choose the WiFi platform\n(Ruckus One, Unleashed or SmartZone) and its credentials.\n\nSyslog: point the APs / controller to $IP, UDP 514.\n\nConsole menu: log in as \"admin\", then: sudo bloodhound-console"
+  [ "$UNATTENDED" = 0 ] && info "$MSG" 22
+else
+  log "install failed"
+  info "The installation failed. Details: $LOG\nLog in as \"admin\" and run: sudo bloodhound-setup" 10
+fi
+clear
+exit 0

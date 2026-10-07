@@ -26,8 +26,8 @@ install required.
   confirmation and a full audit trail
 - **Encrypted exports** — AES-256 password-protected ZIP, or CSV, for
   sharing investigation results
-- **Self-service network setup** — a first-boot console wizard
-  (`setup`) configures IP/gateway/DNS without needing a web UI
+- **Self-service setup** — a first-boot console assistant configures
+  network, host name, time zone and passwords, then installs everything
 - **HTTPS by default** — self-signed certificate generated on first
   boot, with support for uploading your own
 - **Configurable log retention** — automatic purge of logs older than N
@@ -49,32 +49,26 @@ Supported hypervisor: VMware ESXi 7.0+ / 8.0+.
 
 ## Getting Started
 
-1. Download the latest `.ova` from the
-   [Releases](../../releases) page.
+1. Download the latest `.ova` (GitHub Releases, or the artifacts of the
+   "Package and OVA" workflow run).
 2. Deploy it on your ESXi host (**Create/Register VM → Deploy a virtual
-   machine from an OVF or OVA file**).
-3. Power on the VM and open its console (not SSH — the network isn't
-   configured yet).
-4. Log in:
-   ```
-   login: admin
-   password: password
-   ```
-   You'll be prompted to set a new password immediately.
-5. Configure the network:
-   ```bash
-   setup
-   ```
-   Follow the prompts (IP, subnet, gateway, DNS, hostname). Can be
-   re-run anytime.
-6. Open `https://<the-ip-you-just-set>` and log in:
-   ```
-   username: bloodhound
-   password: password
-   ```
-   Change this immediately under **Settings → Password**.
-7. Go to **Settings**, pick your WiFi platform (Ruckus One / Unleashed /
+   machine from an OVF or OVA file**). Thin provisioning is fine.
+3. Power on the VM and open its **console**. A setup assistant asks for the
+   network (DHCP or static), host name, time zone, NTP, the password of the
+   `admin` system account and the password of the web user `bloodhound`,
+   then installs the application (about 5 minutes). No default password is
+   left on the appliance.
+4. Open `https://<appliance-ip>` and sign in as `bloodhound`.
+5. Go to **Settings**, pick your WiFi platform (Ruckus One / Unleashed /
    SmartZone), and enter its credentials.
+6. Point the syslog of the APs / controller to the appliance, UDP 514.
+
+Console menu (status, network, passwords, Graylog access, restart…): log in
+as `admin`, then `sudo bloodhound-console`.
+
+Install on an existing Ubuntu/Debian server instead:
+`tar xzf bloodhound-*.tar.gz && cd bloodhound-*/ && sudo ./install.sh`.
+See [`packaging/QUICKSTART.md`](packaging/QUICKSTART.md).
 
 Full administration guide (backups, disk expansion, troubleshooting,
 service management): see [`ADMIN.md`](ADMIN.md).
@@ -82,21 +76,23 @@ service management): see [`ADMIN.md`](ADMIN.md).
 ## Architecture
 
 ```
-Syslog (Ruckus APs) → Graylog → OpenSearch ← FastAPI backend ← React frontend
+Syslog (Ruckus APs) → Graylog → OpenSearch ← FastAPI backend ← nginx + React frontend
                                      ↑
                                    Redis (client cache, config)
                                      ↑
                       Ruckus One API / Unleashed (Selenium) / SmartZone API
 ```
 
-- **Frontend**: React + Vite, served as a static production build by nginx
+- **Frontend**: React + Vite, served by nginx (HTTPS, reverse proxy to the API)
 - **Backend**: FastAPI (Python), enriches raw flow logs with client
   identity from the active platform's API
 - **Log pipeline**: Graylog (syslog ingestion + extraction rules) → OpenSearch
 - **Cache/config**: Redis — also the live source of truth for
   platform credentials, so changes via the UI take effect immediately
-- **Unleashed sync**: a systemd-managed Python worker (Selenium-driven,
-  since Unleashed has no public REST API)
+- **Unleashed sync**: a Python worker container (headless Chromium, since
+  Unleashed has no public REST API)
+- **Everything runs in Docker Compose** (`/opt/bloodhound`); only 443/80
+  (web) and 514 (syslog) are exposed on the network
 
 ## License
 

@@ -1,0 +1,130 @@
+name: Package and OVA
+
+# Builds the offline installation package, tests it end to end (install, a
+# Ruckus flow log through Graylog, search through the API), then builds the
+# VMware appliance (OVA).
+#
+#  - push a branch named ova/...   → package + test + OVA as workflow artifacts
+#  - Actions tab → "Run workflow"  → same, from any branch
+#  - push a tag v1.2.3             → same, and a GitHub Release with the package
+on:
+  push:
+    branches: ["ova/**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # GitHub Release on tags
+
+concurrency:
+  group: ova-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"
+          else v="$(cat VERSION)-dev.${GITHUB_RUN_NUMBER}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Build the offline package
+        run: bash scripts/build-package.sh "${{ steps.v.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: dist/bloodhound-*.tar.gz*
+          compression-level: 0
+          retention-days: 14
+
+  e2e:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions/download-artifact@v4
+        with: { name: package, path: dist }
+      - name: Install from the package
+        run: |
+          tar xzf dist/bloodhound-*.tar.gz -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"/bloodhound-*/
+          sudo BH_WAIT=900 ./install.sh
+      - name: Only 80/443/514 exposed on the host
+        run: |
+          sudo ss -lntuH | awk '{print $5}' | grep -vE '^(127\.|\[::1\]|\[::ffff:127)' | sort -u | tee listening.txt
+          ! grep -E ':(9000|9200|6379|8000|27017)$' listening.txt
+      - name: A Ruckus flow log is parsed and searchable
+        run: |
+          MAC="AA:BB:CC:00:11:22"
+          for i in 1 2 3; do
+            echo "<134>$(date '+%b %e %H:%M:%S') AP-Test Ruckus-AP New Flow: {\"Src_MAC\":\"$MAC\",\"Src_IP\":\"192.168.10.50\",\"Dst_IP\":\"93.184.216.34\",\"Src_port\":\"51515\",\"Dst_port\":\"443\",\"L4protocol\":\"TCP\",\"apName\":\"AP-Lobby\",\"apMac\":\"11:22:33:44:55:66\",\"wlanName\":\"Corp\",\"zoneName\":\"Geneva\"}" > /dev/udp/127.0.0.1/514
+            sleep 1
+          done
+          curl -sk -c jar -H 'Content-Type: application/json' \
+            -d '{"username":"bloodhound","password":"password"}' https://127.0.0.1/api/v1/auth/login | tee login.json
+          for i in $(seq 1 30); do
+            curl -sk -b jar "https://127.0.0.1/api/v1/search?client_mac=$MAC" > search.json
+            python3 - <<'EOF' && exit 0
+          import json, sys
+          d = json.load(open("search.json"))
+          logs = d.get("logs", [])
+          if not logs:
+              sys.exit(1)
+          e = logs[0]
+          print(json.dumps(e, indent=1))
+          assert e["src_ip"] == "192.168.10.50", e
+          assert e["dst_ip"] == "93.184.216.34", e
+          assert e["dst_port"] == 443, e
+          assert e["proto"] == "TCP", e
+          assert e["ap_name"] == "AP-Lobby", e
+          EOF
+            sleep 5
+          done
+          echo "log not found or not parsed:"; cat search.json; exit 1
+      - name: Logs on failure
+        if: failure()
+        run: cd /opt/bloodhound && sudo docker compose ps && sudo docker compose logs --tail 80
+
+  ova:
+    needs: [package, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions/download-artifact@v4
+        with: { name: package, path: dist }
+      - name: Build the VMware appliance (OVA)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libguestfs-tools qemu-utils >/dev/null
+          sudo chmod 0644 /boot/vmlinuz-*   # libguestfs reads the host kernel
+          WORK=/mnt/ova-build OUT=dist sudo -E bash appliance/build-ova.sh dist/bloodhound-${{ needs.package.outputs.version }}.tar.gz
+          sudo chown -R "$USER" dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ova
+          path: dist/bloodhound-*.ova*
+          compression-level: 0
+          retention-days: 14
+      - name: GitHub Release (tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Release assets are limited to 2 GB each: larger files stay as workflow artifacts
+          files=()
+          for f in dist/bloodhound-*.tar.gz dist/bloodhound-*.tar.gz.sha256 dist/bloodhound-*.ova dist/bloodhound-*.ova.sha256; do
+            [ "$(stat -c %s "$f")" -lt 2000000000 ] && files+=("$f") || echo "too large for a release asset: $f"
+          done
+          gh release create "$GITHUB_REF_NAME" --title "Bloodhound ${GITHUB_REF_NAME#v}" \
+            --notes "VMware appliance: deploy the .ova (ESXi 7.0+), then open the VM console. Files over 2 GB are in the workflow run artifacts." \
+            "${files[@]}"
