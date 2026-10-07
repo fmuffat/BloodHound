@@ -150,9 +150,14 @@ def get_driver():
     # In the backend Docker image (appliance): Debian's chromium + chromedriver
     # are installed side by side and always version-matched — use them
     # directly, no download (the appliance may have no Internet access).
-    if os.path.exists("/usr/bin/chromedriver") and os.path.exists("/usr/bin/chromium"):
-        options.binary_location = "/usr/bin/chromium"
-        return webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=options)
+    # CHROMEDRIVER_PATH / CHROME_BIN are set by the Dockerfile only: on an
+    # Ubuntu host the same paths are Snap wrappers that fail for service
+    # accounts (see below), so never pick them up by path alone.
+    container_driver = os.getenv("CHROMEDRIVER_PATH")
+    container_chrome = os.getenv("CHROME_BIN")
+    if container_driver and container_chrome and os.path.exists(container_driver):
+        options.binary_location = container_chrome
+        return webdriver.Chrome(service=Service(container_driver), options=options)
 
     # Prefer a real (non-Snap) browser binary. google-chrome is checked
     # first since it's the one we explicitly install for this purpose;
