@@ -858,14 +858,23 @@ async def change_password(
     return resp
 
 
-@router.post("/gdpr/erase-client")
-async def gdpr_erase_client(
+ERASE_LOG_KEY = "clients:erase_log"
+
+
+async def _migrate_erase_log(r) -> None:
+    """Keep the entries recorded under the audit key used by earlier versions."""
+    if await r.exists("gdpr:audit_log") and not await r.exists(ERASE_LOG_KEY):
+        await r.rename("gdpr:audit_log", ERASE_LOG_KEY)
+
+
+@router.post("/clients/erase")
+async def erase_client(
     payload: dict = Body(...),
     bh_token: str = Cookie(default=None),
 ):
     """
     Permanently erase all logs, history, and cached data for a single MAC
-    address (GDPR right-to-erasure support). Requires re-entering the
+    address (right-to-erasure requests). Requires re-entering the
     current password — this is a destructive, irreversible action, so it
     is deliberately gated the same way a password change is, not just a
     UI confirmation dialog that could be clicked through accidentally.
@@ -919,7 +928,7 @@ async def gdpr_erase_client(
     # logs and history snapshots — is what's deleted above.
     r = await get_redis()
 
-    # Audit trail — required to demonstrate GDPR compliance. Records *that*
+    # Audit trail — demonstrates that erasure requests were honoured. Records *that*
     # an erasure happened, who performed it, and when — not the erased
     # person's own data, so this doesn't reintroduce what was just erased.
     audit_entry = {
@@ -929,8 +938,9 @@ async def gdpr_erase_client(
         "deleted_logs":    deleted_logs,
         "deleted_history": deleted_history,
     }
-    await r.rpush("gdpr:audit_log", json.dumps(audit_entry))
-    log.warning(f"GDPR erasure performed: {audit_entry}")
+    await _migrate_erase_log(r)
+    await r.rpush(ERASE_LOG_KEY, json.dumps(audit_entry))
+    log.warning(f"Client erasure performed: {audit_entry}")
 
     return {
         "status": "ok",
@@ -940,15 +950,16 @@ async def gdpr_erase_client(
     }
 
 
-@router.get("/gdpr/audit-log")
-async def gdpr_audit_log(bh_token: str = Cookie(default=None)):
-    """Return the GDPR erasure audit trail (who erased what, and when)."""
+@router.get("/clients/erase-log")
+async def erase_log(bh_token: str = Cookie(default=None)):
+    """Return the client erasure audit trail (who erased what, and when)."""
     from app.services.auth import verify_token
     if not bh_token or not verify_token(bh_token):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     r = await get_redis()
-    entries = await r.lrange("gdpr:audit_log", 0, -1)
+    await _migrate_erase_log(r)
+    entries = await r.lrange(ERASE_LOG_KEY, 0, -1)
     return {"entries": [json.loads(e) for e in entries]}
 
 

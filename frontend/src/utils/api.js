@@ -53,7 +53,7 @@ export const api = {
   logout: () => req('POST', '/auth/logout'),
   getMe: () => req('GET', '/auth/me'),
   changePassword: (p) => req('POST', '/auth/change-password', p),
-  gdprEraseClient: (mac, password) => req('POST', '/gdpr/erase-client', { mac, password }),
+  eraseClient: (mac, password) => req('POST', '/clients/erase', { mac, password }),
 
   // MAC timeline
   getMacTimeline: (mac) => req('GET', `/lookup/mac/${mac}/timeline`),

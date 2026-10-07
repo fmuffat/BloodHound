@@ -1,5 +1,5 @@
 """
-OpenSearch helpers shared by log retention and GDPR erasure.
+OpenSearch helpers shared by log retention and client erasure.
 
 Graylog rotates its indices (graylog_0, graylog_1, ...) and locks rotated
 ones read-only (index.blocks.write). Deleting documents from them requires

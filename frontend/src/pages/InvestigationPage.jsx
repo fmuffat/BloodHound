@@ -19,7 +19,7 @@ function formatDate(iso) {
   return new Date(iso).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })
 }
 
-function GdprEraseModal({ mac, onConfirm, onClose, loading, error, result }) {
+function EraseClientModal({ mac, onConfirm, onClose, loading, error, result }) {
   const [pwd, setPwd]   = useState('')
   const [typed, setTyped] = useState(mac || '')
   const canConfirm = pwd && typed.trim().toUpperCase() === (mac || '').toUpperCase()
@@ -114,10 +114,10 @@ export default function InvestigationPage() {
   const [zipPassword2, setZipPassword2] = useState('')
   const [zipLoading, setZipLoading]     = useState(false)
   const [zipError, setZipError]         = useState(null)
-  const [showGdpr, setShowGdpr]         = useState(false)
-  const [gdprLoading, setGdprLoading]   = useState(false)
-  const [gdprError, setGdprError]       = useState(null)
-  const [gdprResult, setGdprResult]     = useState(null)
+  const [showErase, setShowErase]         = useState(false)
+  const [eraseLoading, setEraseLoading]   = useState(false)
+  const [eraseError, setEraseError]       = useState(null)
+  const [eraseResult, setEraseResult]     = useState(null)
 
   const load = async (pageNum = 0) => {
     setLoading(true)
@@ -271,9 +271,9 @@ export default function InvestigationPage() {
           </div>
 
           <div style={{display:'flex', justifyContent:'flex-end', marginTop:8}}>
-            <button onClick={() => setShowGdpr(true)}
+            <button onClick={() => setShowErase(true)}
               style={{padding:'6px 12px', background:'none', border:'1px solid var(--red)', borderRadius:4, color:'var(--red)', fontFamily:'var(--mono)', fontSize:11, cursor:'pointer'}}>
-              Erase all logs for this client (GDPR)
+              Erase all logs for this client
             </button>
           </div>
 
@@ -404,25 +404,25 @@ export default function InvestigationPage() {
         )}
       </div>
       {/* ZIP export modal */}
-      {showGdpr && (
-        <GdprEraseModal
+      {showErase && (
+        <EraseClientModal
           mac={mac}
-          loading={gdprLoading}
-          error={gdprError}
-          result={gdprResult}
+          loading={eraseLoading}
+          error={eraseError}
+          result={eraseResult}
           onConfirm={async (password) => {
-            setGdprLoading(true)
-            setGdprError(null)
+            setEraseLoading(true)
+            setEraseError(null)
             try {
-              const res = await api.gdprEraseClient(mac, password)
-              setGdprResult(res)
+              const res = await api.eraseClient(mac, password)
+              setEraseResult(res)
             } catch (e) {
-              setGdprError(e.message === 'API error 401' ? 'Incorrect password' : e.message)
+              setEraseError(e.message === 'API error 401' ? 'Incorrect password' : e.message)
             } finally {
-              setGdprLoading(false)
+              setEraseLoading(false)
             }
           }}
-          onClose={() => { setShowGdpr(false); setGdprError(null); setGdprResult(null) }}
+          onClose={() => { setShowErase(false); setEraseError(null); setEraseResult(null) }}
         />
       )}
 

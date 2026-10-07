@@ -22,8 +22,8 @@ install required.
   showing full connection history
 - **Client identity enrichment** — hostname, OS, device type, username,
   and guest/sponsor information automatically merged into each log entry
-- **GDPR-ready** — per-client log/history erasure with password
-  confirmation and a full audit trail
+- **Per-client erasure** — delete all logs and history of one client,
+  with password confirmation and an audit trail
 - **Encrypted exports** — AES-256 password-protected ZIP, or CSV, for
   sharing investigation results
 - **Self-service setup** — a first-boot console assistant configures
