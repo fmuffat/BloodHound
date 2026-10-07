@@ -8,7 +8,7 @@
 # virt-customize (libguestfs-tools, qemu-utils). The application is installed at first boot by
 # the console assistant (appliance/files/usr/local/sbin/bloodhound-setup), on the second (data) disk.
 # Virtual hardware: 4 vCPU, 8 GB, PVSCSI, VMXNET3, BIOS, hardware version 14 (ESXi 6.7+);
-# disk 1 (system) 40 GB and disk 2 (data) 150 GB, both thin.
+# disk 1 (system) 30 GB and disk 2 (data) 150 GB, both thin.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PKG="${1:?usage: build-ova.sh dist/bloodhound-<version>.tar.gz}"
@@ -16,7 +16,7 @@ NAME="$(basename "$PKG" .tar.gz)"            # bloodhound-<version>
 VERSION="${NAME#bloodhound-}"
 WORK="${WORK:-/data/ova-build}"
 OUT="${OUT:-dist}"
-CPUS="${CPUS:-4}" MEM_MB="${MEM_MB:-8192}" SYS_GB="${SYS_GB:-40}" DATA_GB="${DATA_GB:-150}"
+CPUS="${CPUS:-4}" MEM_MB="${MEM_MB:-8192}" SYS_GB="${SYS_GB:-30}" DATA_GB="${DATA_GB:-150}"
 BASE_URL="https://cloud-images.ubuntu.com/releases/noble/release"
 BASE_IMG="ubuntu-24.04-server-cloudimg-amd64.img"
 PACKAGES="docker.io docker-compose-v2 open-vm-tools whiptail cloud-guest-utils curl python3"
