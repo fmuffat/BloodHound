@@ -45,7 +45,11 @@ rm -rf "$WORK/pkg" "$WORK/ova" && mkdir -p "$WORK/pkg" "$WORK/ova"
 tar xzf "$PKG" -C "$WORK/pkg"
 cp "$WORK/$BASE_IMG" "$WORK/system.qcow2"
 qemu-img resize -q "$WORK/system.qcow2" "${SYS_GB}G"
+# The cloud image's root file system is ~2.5 GB: grow it to the whole disk
+# FIRST, or copying the ~2 GB package fills it up (virt-customize does not
+# reliably report ENOSPC on --copy-in: files end up truncated).
 virt-customize -a "$WORK/system.qcow2" --memsize 2048 --smp 2 --no-logfile --no-network \
+  --run-command 'growpart /dev/sda 1 && resize2fs /dev/sda1' \
   --touch /etc/cloud/cloud-init.disabled \
   --copy-in "$WORK/debs:/tmp" \
   --run-command 'DEBIAN_FRONTEND=noninteractive dpkg -i --skip-same-version /tmp/debs/*.deb >/tmp/dpkg.log 2>&1 || { tail -40 /tmp/dpkg.log; exit 1; }; rm -rf /tmp/debs /tmp/dpkg.log' \
@@ -56,11 +60,21 @@ virt-customize -a "$WORK/system.qcow2" --memsize 2048 --smp 2 --no-logfile --no-
   --copy-in "$WORK/pkg/$NAME:/opt" \
   --run-command "mv /opt/$NAME /opt/bloodhound-package && chmod 755 /opt/bloodhound-package/*.sh" \
   --run-command 'chmod 755 /usr/local/sbin/bloodhound-*; chmod 600 /etc/netplan/*.yaml; rm -f /etc/netplan/50-cloud-init.yaml' \
+  --run-command 'chown -R root:root /opt/bloodhound-package /usr/local/sbin/bloodhound-* /usr/local/lib/bloodhound /etc/bloodhound /etc/netplan /etc/systemd/system/bloodhound-*' \
   --run-command 'rm -f /etc/ssh/sshd_config.d/60-cloudimg-settings.conf /etc/ssh/ssh_host_*' \
   --run-command 'systemctl enable bloodhound-issue.service bloodhound-setup.service ssh.service open-vm-tools.service' \
   --hostname bloodhound --timezone UTC \
   --run-command 'apt-get clean; rm -rf /var/lib/apt/lists/* /var/log/*.log; truncate -s 0 /etc/machine-id; rm -f /var/lib/dbus/machine-id'
 virt-sparsify --in-place "$WORK/system.qcow2" >/dev/null
+
+echo "==> Verifying the package inside the image"
+# Every file of the package must be in the image, byte for byte.
+(cd "$WORK/pkg/$NAME" && find . -type f | sort | while read -r f; do sha256sum "$f" | cut -d" " -f1; done) > "$WORK/pkg.sha256"
+(cd "$WORK/pkg/$NAME" && find . -type f | sort | while read -r f; do echo "checksum sha256 /opt/bloodhound-package/${f#./}"; done) > "$WORK/check.gf"
+guestfish --ro -a "$WORK/system.qcow2" -i < "$WORK/check.gf" > "$WORK/img.sha256"
+diff "$WORK/pkg.sha256" "$WORK/img.sha256" >/dev/null || { echo "package corrupted inside the image" >&2; exit 1; }
+echo "    $(wc -l < "$WORK/pkg.sha256") files OK"
+guestfish --ro -a "$WORK/system.qcow2" -i df-h | grep -E "sda1|/sysroot$" || true
 
 echo "==> VMware disks"
 # Only the system disk is shipped. The data disk is declared without file: the hypervisor

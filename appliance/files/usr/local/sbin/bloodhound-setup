@@ -50,6 +50,8 @@ prepare_data_disk() {
 if [ -f "$BH_STATE/setup.conf" ]; then
   # shellcheck disable=SC1091
   . "$BH_STATE/setup.conf"
+  # It may contain passwords: do not leave it on the appliance
+  rm -f "$BH_STATE/setup.conf"
   UNATTENDED=1
 else
   UNATTENDED=0

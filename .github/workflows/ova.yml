@@ -109,6 +109,42 @@ jobs:
           sudo chmod 0644 /boot/vmlinuz-*   # libguestfs reads the host kernel
           WORK=/mnt/ova-build OUT=dist sudo -E bash appliance/build-ova.sh dist/bloodhound-${{ needs.package.outputs.version }}.tar.gz
           sudo chown -R "$USER" dist
+      - name: First boot of the appliance (QEMU/KVM, unattended setup)
+        # Boots the exact system disk shipped in the OVA, with a second empty
+        # data disk, runs the first-boot assistant in unattended mode and signs
+        # in to the web interface with the password it set.
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 >/dev/null
+          [ -e /dev/kvm ] || { echo "no KVM on this runner"; exit 1; }
+          sudo chmod 666 /dev/kvm
+          cd /mnt/ova-build
+          sudo qemu-img create -q -f qcow2 -b system.qcow2 -F qcow2 boot-test.qcow2
+          sudo qemu-img create -q -f qcow2 data-test.qcow2 150G
+          printf '%s\n' NETWORK=dhcp HOSTNAME_NEW=bh-ci TIMEZONE=Europe/Paris \
+            "ADMIN_PASSWORD='Ci-admin-12345'" "WEB_PASSWORD='Ci-web-12345'" > setup.conf
+          sudo virt-customize -q -a boot-test.qcow2 --no-network --copy-in setup.conf:/etc/bloodhound
+          sudo qemu-system-x86_64 -enable-kvm -cpu host -m 8192 -smp 4 \
+            -drive file=boot-test.qcow2,if=virtio -drive file=data-test.qcow2,if=virtio \
+            -nic user,model=virtio-net-pci,hostfwd=tcp::8443-:443,hostfwd=udp::5514-:514 \
+            -display none -serial file:serial.log -daemonize -pidfile qemu.pid
+          for i in $(seq 1 180); do
+            code="$(curl -sk -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+              -d '{"username":"bloodhound","password":"Ci-web-12345"}' https://127.0.0.1:8443/api/v1/auth/login || true)"
+            [ "$code" = 200 ] && { echo "signed in with the password set by the assistant after $((i * 10)) s"; break; }
+            [ "$i" = 180 ] && { echo "appliance not ready after 30 min (last HTTP $code)"; exit 1; }
+            sleep 10
+          done
+          code="$(curl -sk -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+            -d '{"username":"bloodhound","password":"password"}' https://127.0.0.1:8443/api/v1/auth/login)"
+          [ "$code" = 401 ] || { echo "default web password still accepted ($code)"; exit 1; }
+          echo "default password refused: OK"
+      - name: Appliance logs on failure
+        if: failure()
+        run: |
+          cd /mnt/ova-build
+          [ -f qemu.pid ] && sudo kill "$(cat qemu.pid)" && sleep 5 || true
+          tail -60 serial.log 2>/dev/null || true
+          [ -f boot-test.qcow2 ] && sudo virt-cat -a boot-test.qcow2 /var/log/bloodhound-setup.log | tail -80 || true
       - uses: actions/upload-artifact@v4
         with:
           name: ova
