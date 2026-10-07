@@ -4,14 +4,15 @@ After=network.target docker.service
 Requires=docker.service
 
 [Service]
-User=fmuffat
-WorkingDirectory=/home/fmuffat/syslog-platform
-Environment="UNLEASHED_IP=192.168.1.130"
-Environment="UNLEASHED_USERNAME=admin"
-Environment="UNLEASHED_PASSWORD=Password74!"
+User=bloodhound
+WorkingDirectory=/opt/bloodhound/syslog-platform
+# Bootstrap credentials only (first boot, before anything is saved in the UI).
+# The live config is read from Redis (unleashed:config) on every cycle.
+# Never put credentials directly in this unit file.
+EnvironmentFile=-/opt/bloodhound/syslog-platform/backend/.env
 Environment="REDIS_URL=redis://127.0.0.1:6379"
 Environment="UNLEASHED_SYNC_INTERVAL=300"
-ExecStart=/usr/bin/python3 /home/fmuffat/syslog-platform/unleashed_worker.py --daemon
+ExecStart=/usr/bin/python3 /opt/bloodhound/syslog-platform/unleashed_worker.py --daemon
 Restart=always
 RestartSec=30
 

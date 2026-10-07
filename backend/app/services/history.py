@@ -75,13 +75,38 @@ async def _ensure_index():
         log.error(f"Failed to create index {INDEX}: {r.text}")
 
 
+# Re-write an unchanged snapshot at most this often. Snapshots only need to
+# exist when a client's state changes (get_snapshot_at picks the latest one
+# before a log's timestamp); the periodic refresh keeps a recent snapshot
+# available after the retention purge removes old ones.
+SNAPSHOT_REFRESH_SECONDS = 24 * 3600
+
+
+async def _state_changed(mac: str, doc: dict) -> bool:
+    """True if this client's state differs from its last written snapshot."""
+    import hashlib
+    import json
+    from app.services.cache import get_redis
+
+    digest = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
+    r = await get_redis()
+    key = f"hist:last:{mac}"
+    if await r.get(key) == digest:
+        return False
+    await r.setex(key, SNAPSHOT_REFRESH_SECONDS, digest)
+    return True
+
+
 async def write_snapshot(mac: str, info: dict, source: str = "ruckus_one") -> bool:
-    """Write a client state snapshot to OpenSearch."""
+    """
+    Write a client state snapshot to OpenSearch — only when the state changed
+    (or once a day). Syncs run every 5 minutes; writing unconditionally grew
+    the index by ~288 documents per client per day.
+    """
     await _ensure_index()
 
     doc = {
         "mac":           mac.lower(),
-        "snapshot_at":   datetime.now(timezone.utc).isoformat(),
         "hostname":      info.get("hostname", ""),
         "username":      info.get("username", ""),
         "os_type":       info.get("os_type", ""),
@@ -97,12 +122,18 @@ async def write_snapshot(mac: str, info: dict, source: str = "ruckus_one") -> bo
         "sponsor_email": info.get("sponsor_email", ""),
         "source":        source,
     }
+    if not await _state_changed(doc["mac"], doc):
+        return True
+    doc["snapshot_at"] = datetime.now(timezone.utc).isoformat()
 
     client = await _get_client()
     r = await client.post(f"{OPENSEARCH_URL}/{INDEX}/_doc", json=doc, headers=HEADERS)
     if r.status_code in (200, 201):
         return True
     log.error(f"Failed to write snapshot for {mac}: {r.text}")
+    # Forget the digest so the next sync retries instead of skipping
+    from app.services.cache import get_redis
+    await (await get_redis()).delete(f"hist:last:{doc['mac']}")
     return False
 
 
@@ -163,3 +194,32 @@ async def get_latest_snapshot(mac: str) -> dict | None:
     data = r.json()
     hits = data.get("hits", {}).get("hits", [])
     return hits[0].get("_source") if hits else None
+
+
+async def get_snapshots_until(mac: str, until: str, size: int = 200) -> list[dict]:
+    """
+    Snapshots of a MAC taken at or before `until`, newest first. Lets a
+    search pick, for each log line, the snapshot in effect at that log's own
+    timestamp — with one query per MAC instead of one per log.
+    """
+    await _ensure_index()
+
+    query = {
+        "size": size,
+        "query": {
+            "bool": {
+                "must": [
+                    {"term": {"mac": mac.lower()}},
+                    {"range": {"snapshot_at": {"lte": until}}},
+                ]
+            }
+        },
+        "sort": [{"snapshot_at": {"order": "desc"}}],
+    }
+
+    client = await _get_client()
+    r = await client.post(f"{OPENSEARCH_URL}/{INDEX}/_search", json=query, headers=HEADERS)
+    if r.status_code != 200:
+        log.error(f"History lookup failed for {mac}: {r.text}")
+        return []
+    return [h.get("_source", {}) for h in r.json().get("hits", {}).get("hits", [])]

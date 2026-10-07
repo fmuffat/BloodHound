@@ -11,7 +11,12 @@ async function req(method, path, body = null, params = null) {
     body: body ? JSON.stringify(body) : null,
   })
 
-  if (!res.ok) throw new Error(`API error ${res.status}`)
+  if (!res.ok) {
+    const err = new Error(`API error ${res.status}`)
+    err.status = res.status
+    try { err.detail = (await res.json()).detail } catch { /* non-JSON error body */ }
+    throw err
+  }
   return res.json()
 }
 
@@ -87,9 +92,10 @@ export const api = {
 
   // Single event ZIP export
   exportEventZip: async (mac, event, password) => {
-    const res = await fetch(BASE + '/investigation/export-zip-event?password=' + encodeURIComponent(password), {
+    // Password in a header, never in the URL (it would land in nginx logs)
+    const res = await fetch(BASE + '/investigation/export-zip-event', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Export-Password': encodeURIComponent(password) },
       body: JSON.stringify({ mac, event }),
     })
     if (!res.ok) throw new Error('Export error ' + res.status)
@@ -105,9 +111,9 @@ export const api = {
 
   // ZIP export
   exportZip: async (payload, password) => {
-    const res = await fetch(BASE + '/investigation/export-zip?password=' + encodeURIComponent(password), {
+    const res = await fetch(BASE + '/investigation/export-zip', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Export-Password': encodeURIComponent(password) },
       body: JSON.stringify(payload),
     })
     if (!res.ok) throw new Error('Export error ' + res.status)

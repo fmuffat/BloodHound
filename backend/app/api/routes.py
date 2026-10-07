@@ -5,13 +5,14 @@ FastAPI router — search, enrichment and admin endpoints.
 import csv
 import io
 import os
+import re
 import json
 import logging
 from datetime import datetime, timezone
 from app.config import settings
 from typing import Optional
 
-from fastapi import APIRouter, Query, HTTPException, Body
+from fastapi import APIRouter, Query, HTTPException, Body, Request
 from fastapi.responses import StreamingResponse
 
 from app.models.schemas import (
@@ -95,6 +96,7 @@ async def get_filter_options():
     aps    = []
     venues = set()
     ssids  = []
+    aggs   = {}  # stays empty if OpenSearch is unreachable or errors
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -152,17 +154,20 @@ async def get_filter_options():
                     else:
                         # Try Unleashed wlan
                         ul_wlan_keys = await r.keys(f"unleashed:*:wlan:{wlan_id}")
+                        found_unleashed = False
                         for key in ul_wlan_keys:
                             raw = await r.get(key)
                             if raw:
+                                found_unleashed = True
                                 info = json.loads(raw)
                                 ssid = info.get("ssid", "")
                                 if ssid and ssid not in ssids:
                                     ssids.append(ssid)
-                        else:
-                            # Not a GUID, not in Unleashed → SmartZone sends SSID name directly as wlan_id
-                            if not _re.fullmatch(r"[0-9a-fA-F]{32}", wlan_id) and wlan_id not in ssids:
-                                ssids.append(wlan_id)
+                        # Not a GUID, not in Unleashed → SmartZone sends SSID name directly as wlan_id
+                        if (not found_unleashed
+                                and not _re.fullmatch(r"[0-9a-fA-F]{32}", wlan_id)
+                                and wlan_id not in ssids):
+                            ssids.append(wlan_id)
 
     except Exception as e:
         log.warning(f"Options aggregation failed: {e}")
@@ -189,29 +194,76 @@ async def get_filter_options():
 
 # ── Investigation export ──────────────────────────────────────────────────────
 
+EXPORT_PAGE     = 500
+EXPORT_MAX_ROWS = 10000
+
+
+def _csv_cell(value) -> str:
+    """
+    Neutralize spreadsheet formula injection. Hostnames, usernames and guest
+    names come from client devices (e.g. a DHCP hostname like "=HYPERLINK(...)")
+    and would be executed when the export is opened in Excel/LibreOffice.
+    """
+    text = "" if value is None else str(value)
+    if text and text[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + text
+    return text
+
+
+def _writerow(writer, row: list) -> None:
+    writer.writerow([_csv_cell(v) for v in row])
+
+
+async def _export_logs(req: SearchRequest) -> list[dict]:
+    """All logs matching the request (every filter), across pages, bounded."""
+    logs: list[dict] = []
+    offset = 0
+    while len(logs) < EXPORT_MAX_ROWS:
+        result = await graylog.search_logs(
+            query=req.query, from_dt=req.from_dt, to_dt=req.to_dt,
+            src_ip=req.src_ip, dst_ip=req.dst_ip, dst_hostname=req.dst_hostname,
+            client_mac=req.client_mac, client_label=req.client_label,
+            username=req.username, ap_name=req.ap_name, venue=req.venue,
+            ssid=req.ssid, proto=req.proto, dst_port=req.dst_port,
+            is_guest=req.is_guest, limit=EXPORT_PAGE, offset=offset,
+        )
+        page = result.get("logs", [])
+        logs.extend(page)
+        if len(page) < EXPORT_PAGE:
+            break
+        offset += EXPORT_PAGE
+    if len(logs) >= EXPORT_MAX_ROWS:
+        log.warning(f"Export truncated to {EXPORT_MAX_ROWS} rows")
+    return logs[:EXPORT_MAX_ROWS]
+
+
+def _export_password(request: Request) -> str:
+    """
+    ZIP password from a request header — never from the URL, where it would
+    end up in nginx access logs and browser history.
+    """
+    from urllib.parse import unquote
+    # URI-encoded by the frontend: header values can't carry non-ASCII text
+    password = unquote(request.headers.get("x-export-password", ""))
+    if not password:
+        raise HTTPException(status_code=400, detail="Export password is required")
+    return password
+
 @router.post("/investigation/export")
 async def export_investigation(req: SearchRequest):
-    req.limit = 500
-    result = await graylog.search_logs(
-        query=req.query, from_dt=req.from_dt, to_dt=req.to_dt,
-        src_ip=req.src_ip, dst_ip=req.dst_ip, dst_hostname=req.dst_hostname,
-        client_mac=req.client_mac, client_label=req.client_label,
-        username=req.username, ap_name=req.ap_name, venue=req.venue,
-        ssid=req.ssid, proto=req.proto, dst_port=req.dst_port,
-        is_guest=req.is_guest, limit=500, offset=0,
-    )
+    logs = await _export_logs(req)
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
+    _writerow(writer, [
         "Timestamp", "AP", "Venue", "SSID",
         "Src IP", "Dst IP", "Dst Hostname", "Src Port", "Dst Port", "Protocol",
         "Client MAC", "Client Label", "Alias", "Hostname", "Username",
         "OS Type", "Device Type", "Is Guest",
         "Guest Name", "Email", "Phone",
     ])
-    for log_entry in result["logs"]:
-        writer.writerow([
+    for log_entry in logs:
+        _writerow(writer, [
             log_entry.get("timestamp", ""), log_entry.get("ap_name", ""),
             log_entry.get("venue", ""),     log_entry.get("ssid", ""),
             log_entry.get("src_ip", ""),    log_entry.get("dst_ip", ""),
@@ -349,6 +401,8 @@ def _read_env() -> dict:
 def _write_env(env_vars: dict) -> None:
     with open(ENV_PATH, "w") as f:
         for k, v in env_vars.items():
+            # A newline in a UI-supplied value would inject extra variables
+            v = str(v).replace("\r", "").replace("\n", "")
             f.write(f"{k}={v}\n")
 
 
@@ -557,47 +611,67 @@ async def save_retention(payload: dict = Body(...)):
 
 
 async def _purge_old_logs(days: int) -> dict:
-    """Delete logs older than N days from OpenSearch."""
+    """
+    Delete logs AND client history snapshots older than N days.
+
+    Both stores hold personal data (MACs, hostnames, guest names, emails,
+    phone numbers), so the retention period applies to both.
+    """
     import httpx
-    from app.config import settings as app_settings
     from datetime import timedelta
+    from app.services.opensearch import graylog_indices, delete_by_query, HISTORY_INDEX
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
         "%Y-%m-%dT%H:%M:%S.000Z"
     )
+    # "format" tells OpenSearch how to parse *this* value, whatever date
+    # format the field itself is mapped with (Graylog maps `timestamp` with
+    # its own non-ISO format, which made an ISO cutoff fail to parse).
+    log_query = {"query": {"range": {"timestamp": {
+        "lt": cutoff, "format": "strict_date_optional_time",
+    }}}}
+    hist_query = {"query": {"range": {"snapshot_at": {
+        "lt": cutoff, "format": "strict_date_optional_time",
+    }}}}
 
-    query = {
-        "query": {
-            "range": {
-                "timestamp": {"lt": cutoff}
-            }
-        }
-    }
+    deleted_logs = 0
+    deleted_history = 0
+    errors = []
 
-    total_deleted = 0
-    indices = ["graylog_0", "graylog_1", "graylog_2"]
-
-    async with httpx.AsyncClient(timeout=60) as client:
+    # delete_by_query on a large index can take minutes
+    async with httpx.AsyncClient(timeout=600) as client:
+        try:
+            indices = await graylog_indices(client)
+        except Exception as e:
+            indices = []
+            errors.append(f"index listing: {e}")
         for index in indices:
             try:
-                r = await client.post(
-                    f"{app_settings.opensearch_url}/{index}/_delete_by_query?conflicts=proceed",
-                    json=query,
-                    headers={"Content-Type": "application/json"},
-                )
-                if r.status_code == 200:
-                    deleted = r.json().get("deleted", 0)
-                    total_deleted += deleted
-                    if deleted > 0:
-                        log.info(f"Purged {deleted} logs from {index} older than {days} days")
+                deleted = await delete_by_query(client, index, log_query)
+                deleted_logs += deleted
+                if deleted:
+                    log.info(f"Purged {deleted} logs from {index} older than {days} days")
             except Exception as e:
+                errors.append(f"{index}: {e}")
                 log.warning(f"Purge failed for {index}: {e}")
 
-    from app.services.cache import get_redis as get_r
-    r = await get_r()
+        try:
+            deleted_history = await delete_by_query(client, HISTORY_INDEX, hist_query)
+            if deleted_history:
+                log.info(f"Purged {deleted_history} client history snapshots older than {days} days")
+        except Exception as e:
+            errors.append(f"{HISTORY_INDEX}: {e}")
+            log.warning(f"History purge failed: {e}")
+
+    r = await get_redis()
     await r.set("retention:last_purge", datetime.now(timezone.utc).isoformat())
 
-    return {"deleted": total_deleted, "cutoff": cutoff}
+    return {
+        "deleted": deleted_logs,
+        "deleted_history": deleted_history,
+        "cutoff": cutoff,
+        "errors": errors,
+    }
 
 
 @router.post("/workers/purge-logs")
@@ -693,27 +767,47 @@ async def get_mac_timeline(mac: str):
 
 # ── Authentication ────────────────────────────────────────────────────────────
 
-from fastapi import Response, Cookie
+from fastapi import Request, Cookie
 from fastapi.responses import JSONResponse
 
-@router.post("/auth/login")
-async def login(payload: dict = Body(...), response: Response = None):
-    from app.services.auth import verify_credentials, create_token
-    username = payload.get("username", "")
-    password = payload.get("password", "")
 
-    if not await verify_credentials(username, password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+def _client_ip(request: Request) -> str:
+    # The backend is only reachable through nginx (port bound to 127.0.0.1),
+    # so X-Real-IP set by nginx is the real client address.
+    return request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
 
-    token = create_token(username)
-    resp = JSONResponse({"status": "ok", "username": username})
+
+def _set_session_cookie(resp: JSONResponse, username: str) -> None:
+    from app.services.auth import create_token
     resp.set_cookie(
         key="bh_token",
-        value=token,
+        value=create_token(username),
         httponly=True,
+        secure=True,
         max_age=86400,
-        samesite="lax",
+        samesite="strict",
     )
+
+
+@router.post("/auth/login")
+async def login(request: Request, payload: dict = Body(...)):
+    from app.services.auth import (
+        verify_credentials, is_login_blocked, record_failed_login, clear_failed_logins,
+    )
+    username = payload.get("username", "")
+    password = payload.get("password", "")
+    ip = _client_ip(request)
+
+    if await is_login_blocked(ip):
+        raise HTTPException(status_code=429, detail="Too many failed attempts, try again later")
+
+    if not await verify_credentials(username, password):
+        await record_failed_login(ip)
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    await clear_failed_logins(ip)
+    resp = JSONResponse({"status": "ok", "username": username})
+    _set_session_cookie(resp, username)
     return resp
 
 
@@ -752,8 +846,16 @@ async def change_password(
         raise HTTPException(status_code=401, detail="Current password is incorrect")
 
     username = new_username or current_username
-    await change_credentials(username, new_password)
-    return {"status": "ok"}
+    try:
+        await change_credentials(username, new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Changing credentials rotates the JWT secret (all sessions invalidated),
+    # so hand the current user a fresh cookie signed with the new secret.
+    resp = JSONResponse({"status": "ok"})
+    _set_session_cookie(resp, username)
+    return resp
 
 
 @router.post("/gdpr/erase-client")
@@ -769,7 +871,6 @@ async def gdpr_erase_client(
     UI confirmation dialog that could be clicked through accidentally.
     """
     import httpx
-    from app.config import settings as app_settings
     from app.services.auth import verify_token, verify_credentials, get_username
 
     if not bh_token or not verify_token(bh_token):
@@ -789,72 +890,24 @@ async def gdpr_erase_client(
     deleted_logs = 0
     deleted_history = 0
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        # Discover all graylog_* indices dynamically — Graylog rotates them
-        # over time (graylog_0, graylog_1, graylog_2, ...).
-        idx_resp = await client.get(f"{app_settings.opensearch_url}/_cat/indices/graylog_*?h=index")
-        indices = [i.strip() for i in idx_resp.text.splitlines() if i.strip()]
+    from app.services.opensearch import graylog_indices, delete_by_query, HISTORY_INDEX
 
-        match_query = {
-            "query": {
-                "bool": {
-                    "should": [
-                        {"term": {"client_mac": mac_upper}},
-                        {"term": {"client_mac": mac_lower}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            }
-        }
+    def _mac_query(field: str) -> dict:
+        return {"query": {"bool": {
+            "should": [
+                {"term": {field: mac_upper}},
+                {"term": {field: mac_lower}},
+            ],
+            "minimum_should_match": 1,
+        }}}
 
-        for idx in indices:
-            # Rotated/closed indices are locked read-only by Graylog —
-            # lift the lock just long enough to delete, then restore it.
-            settings_resp = await client.get(f"{app_settings.opensearch_url}/{idx}/_settings?include_defaults=true")
-            was_locked = False
-            try:
-                was_locked = (
-                    settings_resp.json().get(idx, {}).get("settings", {})
-                    .get("index", {}).get("blocks", {}).get("write") == "true"
-                )
-            except Exception:
-                pass
-
-            if was_locked:
-                await client.put(f"{app_settings.opensearch_url}/{idx}/_settings",
-                                  json={"index.blocks.write": False})
-
-            del_resp = await client.post(
-                f"{app_settings.opensearch_url}/{idx}/_delete_by_query?conflicts=proceed&refresh=true&wait_for_completion=true",
-                json=match_query,
-            )
-            if del_resp.status_code == 200:
-                deleted_logs += del_resp.json().get("deleted", 0)
-            else:
-                log.warning(f"GDPR erase: failed to delete from {idx}: {del_resp.text}")
-
-            if was_locked:
-                await client.put(f"{app_settings.opensearch_url}/{idx}/_settings",
-                                  json={"index.blocks.write": True})
+    async with httpx.AsyncClient(timeout=600) as client:
+        # All graylog_* indices, rotated (write-locked) ones included
+        for idx in await graylog_indices(client):
+            deleted_logs += await delete_by_query(client, idx, _mac_query("client_mac"))
 
         # Client history snapshots
-        hist_query = {
-            "query": {
-                "bool": {
-                    "should": [
-                        {"term": {"mac": mac_upper}},
-                        {"term": {"mac": mac_lower}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            }
-        }
-        hist_resp = await client.post(
-            f"{app_settings.opensearch_url}/bloodhound_client_history/_delete_by_query?conflicts=proceed&refresh=true",
-            json=hist_query,
-        )
-        if hist_resp.status_code == 200:
-            deleted_history = hist_resp.json().get("deleted", 0)
+        deleted_history = await delete_by_query(client, HISTORY_INDEX, _mac_query("mac"))
 
     # Note: the live cache (ruckus:mac:*/sz:mac:*) is deliberately NOT
     # cleared here. It's the device's current operational state as
@@ -904,51 +957,49 @@ async def gdpr_audit_log(bh_token: str = Cookie(default=None)):
 @router.post("/investigation/export-zip")
 async def export_investigation_zip(
     req: SearchRequest,
-    password: str = Query(..., description="ZIP password"),
+    request: Request,
     bh_token: str = Cookie(default=None),
 ):
     """Export investigation as password-protected ZIP with CSV inside."""
-    import io, csv, pyzipper
+    import pyzipper
     from app.services.auth import verify_token
     if not bh_token or not verify_token(bh_token):
         raise HTTPException(status_code=401, detail="Not authenticated")
+    password = _export_password(request)
 
-    req.limit = 500
-    result = await graylog.search_logs(
-        query=req.query, from_dt=req.from_dt, to_dt=req.to_dt,
-        client_mac=req.client_mac, limit=500, offset=0,
-    )
+    # Same filters as the on-screen search and the CSV export
+    logs = await _export_logs(req)
 
     # Build CSV
     csv_buf = io.StringIO()
     writer  = csv.writer(csv_buf)
-    writer.writerow([
+    _writerow(writer, [
         "Timestamp", "Client MAC", "Client Name", "Guest Type",
         "Sponsor Email", "Src IP", "Dst IP", "Dst Hostname",
         "Src Port", "Dst Port", "Protocol", "SSID", "AP", "Venue",
     ])
-    for log in result["logs"]:
-        writer.writerow([
-            log.get("timestamp", ""),
-            log.get("client_mac", ""),
-            log.get("client_label", ""),
-            log.get("guest_type", ""),
-            log.get("sponsor_email", ""),
-            log.get("src_ip", ""),
-            log.get("dst_ip", ""),
-            log.get("dst_hostname", ""),
-            log.get("src_port", ""),
-            log.get("dst_port", ""),
-            log.get("proto", ""),
-            log.get("ssid", ""),
-            log.get("ap_name", ""),
-            log.get("venue", ""),
+    for entry in logs:
+        _writerow(writer, [
+            entry.get("timestamp", ""),
+            entry.get("client_mac", ""),
+            entry.get("client_label", ""),
+            entry.get("guest_type", ""),
+            entry.get("sponsor_email", ""),
+            entry.get("src_ip", ""),
+            entry.get("dst_ip", ""),
+            entry.get("dst_hostname", ""),
+            entry.get("src_port", ""),
+            entry.get("dst_port", ""),
+            entry.get("proto", ""),
+            entry.get("ssid", ""),
+            entry.get("ap_name", ""),
+            entry.get("venue", ""),
         ])
 
     csv_bytes = csv_buf.getvalue().encode("utf-8-sig")
 
     # Build encrypted ZIP in memory
-    mac_clean = (req.client_mac or "investigation").replace(":", "")
+    mac_clean = re.sub(r"[^0-9A-Za-z]", "", req.client_mac or "") or "investigation"
     ts        = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     csv_name  = f"bloodhound_{mac_clean}_{ts}.csv"
     zip_name  = f"bloodhound_{mac_clean}_{ts}.zip"
@@ -970,16 +1021,17 @@ async def export_investigation_zip(
 
 @router.post("/investigation/export-zip-event")
 async def export_event_zip(
+    request: Request,
     payload: dict = Body(...),
-    password: str = Query(...),
     bh_token: str = Cookie(default=None),
 ):
     """Export a single event as password-protected ZIP."""
-    import io, csv, pyzipper
+    import pyzipper
     from app.services.auth import verify_token
     from app.services.cache import get_client_info
     if not bh_token or not verify_token(bh_token):
         raise HTTPException(status_code=401, detail="Not authenticated")
+    password = _export_password(request)
 
     mac        = payload.get("mac", "")
     event_data = payload.get("event", {})
@@ -990,44 +1042,44 @@ async def export_event_zip(
     # Build CSV
     csv_buf = io.StringIO()
     writer  = csv.writer(csv_buf)
-    writer.writerow(['Field', 'Value'])
-    writer.writerow(['--- CLIENT INFO ---', ''])
-    writer.writerow(['MAC Address', mac])
-    writer.writerow(['Name', client.get('alias') or client.get('guest_name') or client.get('hostname', '')])
-    writer.writerow(['Hostname', client.get('hostname', '')])
-    writer.writerow(['Username', client.get('username', '')])
-    writer.writerow(['OS', client.get('os_type', '')])
-    writer.writerow(['Device', client.get('device_type', '')])
-    writer.writerow(['Venue', client.get('venue', '')])
-    writer.writerow(['SSID', client.get('ssid', '')])
+    _writerow(writer, ['Field', 'Value'])
+    _writerow(writer, ['--- CLIENT INFO ---', ''])
+    _writerow(writer, ['MAC Address', mac])
+    _writerow(writer, ['Name', client.get('alias') or client.get('guest_name') or client.get('hostname', '')])
+    _writerow(writer, ['Hostname', client.get('hostname', '')])
+    _writerow(writer, ['Username', client.get('username', '')])
+    _writerow(writer, ['OS', client.get('os_type', '')])
+    _writerow(writer, ['Device', client.get('device_type', '')])
+    _writerow(writer, ['Venue', client.get('venue', '')])
+    _writerow(writer, ['SSID', client.get('ssid', '')])
 
     if client.get('guest_type') == 'HostGuest':
-        writer.writerow(['--- SPONSORED ACCESS ---', ''])
-        writer.writerow(['Guest Name', client.get('guest_name', '')])
-        writer.writerow(['Phone', client.get('phone', '')])
-        writer.writerow(['Sponsor Email', client.get('sponsor_email', '')])
-        writer.writerow(['Duration', f"{client.get('pass_duration_hours', '')}h"])
-        writer.writerow(['Created', client.get('creation_date', '')])
-        writer.writerow(['Expires', client.get('expiry_date', '')])
+        _writerow(writer, ['--- SPONSORED ACCESS ---', ''])
+        _writerow(writer, ['Guest Name', client.get('guest_name', '')])
+        _writerow(writer, ['Phone', client.get('phone', '')])
+        _writerow(writer, ['Sponsor Email', client.get('sponsor_email', '')])
+        _writerow(writer, ['Duration', f"{client.get('pass_duration_hours', '')}h"])
+        _writerow(writer, ['Created', client.get('creation_date', '')])
+        _writerow(writer, ['Expires', client.get('expiry_date', '')])
     elif client.get('is_guest'):
-        writer.writerow(['--- GUEST INFO ---', ''])
-        writer.writerow(['Guest Name', client.get('guest_name', '')])
-        writer.writerow(['Email', client.get('email', '')])
-        writer.writerow(['Phone', client.get('phone', '')])
+        _writerow(writer, ['--- GUEST INFO ---', ''])
+        _writerow(writer, ['Guest Name', client.get('guest_name', '')])
+        _writerow(writer, ['Email', client.get('email', '')])
+        _writerow(writer, ['Phone', client.get('phone', '')])
 
-    writer.writerow(['--- EVENT ---', ''])
-    writer.writerow(['Timestamp', event_data.get('timestamp', '')])
-    writer.writerow(['Source IP', event_data.get('src_ip', '')])
-    writer.writerow(['Destination IP', event_data.get('dst_ip', '')])
-    writer.writerow(['Destination Host', event_data.get('dst_host', '')])
-    writer.writerow(['Port', event_data.get('dst_port', '')])
-    writer.writerow(['Protocol', event_data.get('proto', '')])
-    writer.writerow(['SSID', event_data.get('ssid', '')])
-    writer.writerow(['AP', event_data.get('ap_name', '')])
-    writer.writerow(['Venue', event_data.get('venue', '')])
+    _writerow(writer, ['--- EVENT ---', ''])
+    _writerow(writer, ['Timestamp', event_data.get('timestamp', '')])
+    _writerow(writer, ['Source IP', event_data.get('src_ip', '')])
+    _writerow(writer, ['Destination IP', event_data.get('dst_ip', '')])
+    _writerow(writer, ['Destination Host', event_data.get('dst_host', '')])
+    _writerow(writer, ['Port', event_data.get('dst_port', '')])
+    _writerow(writer, ['Protocol', event_data.get('proto', '')])
+    _writerow(writer, ['SSID', event_data.get('ssid', '')])
+    _writerow(writer, ['AP', event_data.get('ap_name', '')])
+    _writerow(writer, ['Venue', event_data.get('venue', '')])
 
     csv_bytes = csv_buf.getvalue().encode('utf-8-sig')
-    mac_clean = mac.replace(':', '')
+    mac_clean = re.sub(r"[^0-9A-Za-z]", "", mac) or "event"
     ts        = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
     csv_name  = f"event_{mac_clean}_{ts}.csv"
     zip_name  = f"event_{mac_clean}_{ts}.zip"
@@ -1051,90 +1103,139 @@ async def export_event_zip(
 
 from fastapi import UploadFile, File
 
+SSL_DIR       = os.getenv("BLOODHOUND_SSL_DIR", "/opt/bloodhound/ssl")
+SSL_CERT_PATH = os.path.join(SSL_DIR, "bloodhound.crt")
+SSL_KEY_PATH  = os.path.join(SSL_DIR, "bloodhound.key")
+_HOSTNAME_RE  = r"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+
+
+def _install_cert_pair(tmp_cert: str, tmp_key: str) -> None:
+    """
+    Check that the certificate and key form a valid pair, then atomically
+    move them into place. A mismatched pair must never reach nginx: it would
+    refuse to start on the next reboot and the UI would become unreachable.
+
+    The backend runs in Docker and cannot reload the host's nginx itself —
+    bloodhound-nginx-reload.path (host) watches the certificate file and
+    reloads nginx after a successful `nginx -t`. The key is moved first so
+    the reload only fires once both files are in place.
+    """
+    import ssl
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile=tmp_cert, keyfile=tmp_key)
+    except (ssl.SSLError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Certificate and key do not match or are invalid: {e}")
+    os.chmod(tmp_key, 0o600)
+    os.replace(tmp_key, SSL_KEY_PATH)
+    os.replace(tmp_cert, SSL_CERT_PATH)
+
+
 @router.post("/settings/ssl")
 async def upload_ssl_certificate(
     cert: UploadFile = File(...),
     key:  UploadFile = File(...),
     bh_token: str = Cookie(default=None),
 ):
-    """Upload custom SSL certificate and key, then reload nginx."""
+    """Upload custom SSL certificate and key (nginx reloads on the host)."""
     from app.services.auth import verify_token
-    import subprocess
+    import tempfile
     if not bh_token or not verify_token(bh_token):
         raise HTTPException(status_code=401, detail="Not authenticated")
-
-    cert_path = "/opt/bloodhound/ssl/bloodhound.crt"
-    key_path  = "/opt/bloodhound/ssl/bloodhound.key"
 
     cert_content = await cert.read()
     key_content  = await key.read()
 
     # Validate cert/key are PEM format
-    if not cert_content.startswith(b"-----BEGIN CERTIFICATE"):
+    if not cert_content.lstrip().startswith(b"-----BEGIN CERTIFICATE"):
         raise HTTPException(status_code=400, detail="Invalid certificate format (must be PEM)")
-    if not key_content.startswith(b"-----BEGIN"):
+    if not key_content.lstrip().startswith(b"-----BEGIN"):
         raise HTTPException(status_code=400, detail="Invalid key format (must be PEM)")
 
-    with open(cert_path, "wb") as f:
-        f.write(cert_content)
-    with open(key_path, "wb") as f:
-        f.write(key_content)
+    os.makedirs(SSL_DIR, exist_ok=True)
+    # Temp files in the same directory so os.replace() is atomic
+    fd_c, tmp_cert = tempfile.mkstemp(dir=SSL_DIR, suffix=".crt.tmp")
+    fd_k, tmp_key  = tempfile.mkstemp(dir=SSL_DIR, suffix=".key.tmp")
+    try:
+        with os.fdopen(fd_c, "wb") as f:
+            f.write(cert_content)
+        with os.fdopen(fd_k, "wb") as f:
+            f.write(key_content)
+        _install_cert_pair(tmp_cert, tmp_key)
+    finally:
+        for p in (tmp_cert, tmp_key):
+            if os.path.exists(p):
+                os.remove(p)
 
-    # Reload nginx
-    result = subprocess.run(["sudo", "nginx", "-s", "reload"], capture_output=True)
-    if result.returncode != 0:
-        raise HTTPException(status_code=500, detail=f"nginx reload failed: {result.stderr.decode()}")
-
-    return {"status": "ok", "message": "Certificate uploaded and nginx reloaded"}
+    return {"status": "ok", "message": "Certificate installed — nginx reloads automatically within a few seconds"}
 
 
 @router.post("/settings/ssl/self-signed")
 async def generate_self_signed(
+    request: Request,
     payload: dict = Body(default={}),
     bh_token: str = Cookie(default=None),
 ):
     """Regenerate a self-signed certificate."""
-    from app.services.auth import verify_token
+    import ipaddress
+    import re
     import subprocess
+    import tempfile
+    from app.services.auth import verify_token
     if not bh_token or not verify_token(bh_token):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    cn      = payload.get("cn", "bloodhound.local")
-    days    = payload.get("days", 3650)
+    cn = (payload.get("cn") or "bloodhound.local").strip()
+    if not re.fullmatch(_HOSTNAME_RE, cn):
+        raise HTTPException(status_code=400, detail="Invalid common name (must be a hostname)")
+    try:
+        days = int(payload.get("days", 3650))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid validity period")
+    days = max(1, min(3650, days))
 
-    requested_ip = payload.get("ip", "")
-    if requested_ip:
-        ip = requested_ip
-    else:
-        # Auto-detect this server's own outbound-facing IP rather than
-        # falling back to any hardcoded address — this code ships
-        # identically to every customer, so a fixed default would always
-        # be wrong for their network.
-        import socket
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect(("8.8.8.8", 80))
-                ip = s.getsockname()[0]
-        except Exception:
-            ip = "127.0.0.1"
+    # IP for the SAN: the one requested, else the address the admin used to
+    # reach this page (Host header forwarded by nginx). The backend runs in
+    # Docker, so detecting "our own" IP from here would return the
+    # container's internal address, not the appliance's.
+    requested_ip = (payload.get("ip") or "").strip()
+    if not requested_ip:
+        host = request.headers.get("host", "").rsplit(":", 1)[0].strip("[]")
+        requested_ip = host
+    try:
+        ip = str(ipaddress.ip_address(requested_ip))
+    except ValueError:
+        if payload.get("ip"):
+            raise HTTPException(status_code=400, detail="Invalid IP address")
+        ip = None
 
-    cmd = [
-        "openssl", "req", "-x509", "-nodes",
-        f"-days", str(days),
-        "-newkey", "rsa:2048",
-        "-keyout", "/opt/bloodhound/ssl/bloodhound.key",
-        "-out",    "/opt/bloodhound/ssl/bloodhound.crt",
-        "-subj",   f"/C=CH/ST=Geneva/L=Geneva/O=Bloodhound/CN={cn}",
-        "-addext", f"subjectAltName=IP:{ip},DNS:{cn}",
-    ]
-    result = subprocess.run(cmd, capture_output=True)
-    if result.returncode != 0:
-        raise HTTPException(status_code=500, detail=result.stderr.decode())
+    san = f"DNS:{cn}" + (f",IP:{ip}" if ip else "")
 
-    # Reload nginx
-    subprocess.run(["sudo", "nginx", "-s", "reload"], capture_output=True)
+    os.makedirs(SSL_DIR, exist_ok=True)
+    fd_c, tmp_cert = tempfile.mkstemp(dir=SSL_DIR, suffix=".crt.tmp")
+    fd_k, tmp_key  = tempfile.mkstemp(dir=SSL_DIR, suffix=".key.tmp")
+    os.close(fd_c)
+    os.close(fd_k)
+    try:
+        cmd = [
+            "openssl", "req", "-x509", "-nodes",
+            "-days", str(days),
+            "-newkey", "rsa:2048",
+            "-keyout", tmp_key,
+            "-out",    tmp_cert,
+            "-subj",   f"/O=Bloodhound/CN={cn}",
+            "-addext", f"subjectAltName={san}",
+        ]
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=result.stderr.decode())
+        _install_cert_pair(tmp_cert, tmp_key)
+    finally:
+        for p in (tmp_cert, tmp_key):
+            if os.path.exists(p):
+                os.remove(p)
 
-    return {"status": "ok", "message": f"Self-signed certificate generated for {cn} / {ip}"}
+    return {"status": "ok", "message": f"Self-signed certificate generated for {cn}" + (f" / {ip}" if ip else "")}
 
 
 # ── SmartZone Settings ────────────────────────────────────────────────────────
@@ -1147,9 +1248,14 @@ async def get_smartzone_settings(bh_token: str = Cookie(default=None)):
     r = await get_redis()
     raw = await r.get("sz:config")
     if raw:
-        return json.loads(raw)
+        cfg = json.loads(raw)
+        # Never send the stored password back to the browser
+        cfg["password"] = "***" if cfg.get("password") else ""
+        return cfg
     return {"host": settings.smartzone_host, "port": settings.smartzone_port,
-            "username": settings.smartzone_username, "enabled": settings.smartzone_enabled}
+            "username": settings.smartzone_username,
+            "password": "***" if settings.smartzone_password else "",
+            "enabled": settings.smartzone_enabled}
 
 
 @router.post("/settings/smartzone")
@@ -1161,6 +1267,12 @@ async def save_smartzone_settings(
     if not bh_token or not verify_token(bh_token):
         raise HTTPException(status_code=401, detail="Not authenticated")
     r = await get_redis()
+    # Preserve the previously-saved password if the form sent back the
+    # masked placeholder rather than a real new value.
+    if not payload.get("password") or payload.get("password") == "***":
+        existing_raw = await r.get("sz:config")
+        existing = json.loads(existing_raw) if existing_raw else {}
+        payload["password"] = existing.get("password", "")
     await r.set("sz:config", json.dumps(payload))
     # Update settings in memory
     settings.smartzone_host     = payload.get("host", "")

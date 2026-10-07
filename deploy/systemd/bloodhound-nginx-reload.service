@@ -1,0 +1,7 @@
+[Unit]
+Description=Bloodhound — validate and reload nginx after a certificate change
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nginx -t
+ExecStart=/bin/systemctl reload nginx

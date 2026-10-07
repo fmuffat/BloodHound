@@ -39,13 +39,16 @@ GUEST_USAGES = {"guest", "wispr", "hotspot"}
 
 OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "http://localhost:9200")
 HISTORY_INDEX = "bloodhound_client_history"
+# Same policy as the backend (app/services/history.py): write a snapshot only
+# when the client's state changed, or once a day.
+SNAPSHOT_REFRESH_SECONDS = 24 * 3600
 
 
-def write_snapshot(mac: str, info: dict) -> None:
+def write_snapshot(r, mac: str, info: dict) -> None:
     """Write a client state snapshot to OpenSearch (sync, no asyncio here)."""
+    import hashlib
     doc = {
         "mac":           mac.lower(),
-        "snapshot_at":   datetime.now(timezone.utc).isoformat(),
         "hostname":      info.get("hostname", ""),
         "username":      info.get("username", ""),
         "os_type":       info.get("os_type", ""),
@@ -61,6 +64,11 @@ def write_snapshot(mac: str, info: dict) -> None:
         "sponsor_email": info.get("sponsor_email", ""),
         "source":        "unleashed",
     }
+    digest_key = f"hist:last:{doc['mac']}"
+    digest = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
+    if r.get(digest_key) == digest:
+        return
+    doc["snapshot_at"] = datetime.now(timezone.utc).isoformat()
     try:
         resp = requests.post(
             f"{OPENSEARCH_URL}/{HISTORY_INDEX}/_doc",
@@ -68,6 +76,8 @@ def write_snapshot(mac: str, info: dict) -> None:
         )
         if resp.status_code not in (200, 201):
             log.warning(f"Failed to write history snapshot for {mac}: {resp.text}")
+            return
+        r.setex(digest_key, SNAPSHOT_REFRESH_SECONDS, digest)
     except Exception as e:
         log.warning(f"Failed to write history snapshot for {mac}: {e}")
 
@@ -306,7 +316,7 @@ def sync_once(ip: str, username: str, password: str) -> dict:
 
                 # Store under standard ruckus:mac key for unified enrichment
                 r.setex(f"ruckus:mac:{mac}", 600, json.dumps(info))
-                write_snapshot(mac, info)
+                write_snapshot(r, mac, info)
                 client_count += 1
 
         log.info(f"Clients synced: {client_count}")

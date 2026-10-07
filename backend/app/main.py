@@ -47,6 +47,10 @@ async def daily_purge():
 async def lifespan(app: FastAPI):
     log.info("Starting syslog-backend")
 
+    # Per-appliance JWT secret — must be loaded before serving any request
+    from app.services.auth import init_secret
+    await init_secret()
+
     # Initial Ruckus One sync
     try:
         await ruckus.full_sync()

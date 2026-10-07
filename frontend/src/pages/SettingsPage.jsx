@@ -419,7 +419,7 @@ function SecurityPanel() {
     if (!currentPwd) { setError('Please enter your current password'); return }
     if (!newPwd)     { setError('Please enter a new password'); return }
     if (newPwd !== confirmPwd) { setError('New passwords do not match'); return }
-    if (newPwd.length < 6)    { setError('Password must be at least 6 characters'); return }
+    if (newPwd.length < 8)    { setError('Password must be at least 8 characters'); return }
 
     setSaving(true)
     setError(null)
@@ -436,7 +436,7 @@ function SecurityPanel() {
       setNewUser('')
       setTimeout(() => setSaved(false), 3000)
     } catch (e) {
-      setError(e.message === 'API error 401' ? 'Current password is incorrect' : e.message)
+      setError(e.message === 'API error 401' ? 'Current password is incorrect' : (e.detail || e.message))
     } finally {
       setSaving(false)
     }

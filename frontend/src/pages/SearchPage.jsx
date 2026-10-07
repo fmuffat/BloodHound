@@ -112,7 +112,7 @@ export default function SearchPage() {
           <span className="search-title-label">FLOW LOGS</span>
           {results && (
             <span className="search-count">
-              {from}–{to} / {results.total.toLocaleString()} results
+              {from}–{to} / {results.total.toLocaleString()}{results.truncated ? '+' : ''} results
             </span>
           )}
         </div>

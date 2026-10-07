@@ -1,0 +1,19 @@
+[Unit]
+Description=Bloodhound — generate per-appliance secrets on first boot
+# Only on a freshly deployed OVA (marker created by factory-reset.sh)
+ConditionPathExists=/opt/bloodhound/.firstboot
+# Host keys and TLS cert must exist before sshd/nginx start. Runs after
+# Docker because it recreates the containers with the new Graylog secrets.
+Before=ssh.service ssh.socket nginx.service
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/bloodhound/syslog-platform/deploy/firstboot.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

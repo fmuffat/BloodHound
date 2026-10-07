@@ -26,6 +26,12 @@ HEADERS = {
     "Accept": "application/json",
 }
 
+# MACs touched by the current full_sync — their history snapshot is written
+# once, from the final merged state (client + guest + alias), at the end of
+# the sync. Writing it from each step separately produced two alternating
+# states per guest (with and without guest fields) on every cycle.
+_synced_macs: set[str] = set()
+
 # Region URL mapping
 REGION_URLS = {
     "EU":   ("https://api.eu.ruckus.cloud",  "https://eu.ruckus.cloud"),
@@ -266,7 +272,7 @@ async def sync_clients() -> int:
             "synced_at":   datetime.now(timezone.utc).isoformat(),
         }
         await redis.setex(f"ruckus:mac:{mac}", 600, json.dumps(info))
-        await write_snapshot(mac, info, source="ruckus_one")
+        _synced_macs.add(mac)
 
         # Store ap_name → venue mapping for log enrichment
         ap_name = c.get("apInformation", {}).get("name", "")
@@ -372,9 +378,7 @@ async def sync_guests() -> int:
             if current_ap:
                existing["ap_name"] = current_ap
             await redis.set(f"ruckus:mac:{mac}", json.dumps(existing), ex=600)
-            # Write snapshot with full guest info (including sponsor/guest_type)
-            from app.services.history import write_snapshot
-            await write_snapshot(mac, existing, source="ruckus_one")
+            _synced_macs.add(mac)
             count += 1
 
         # Store by guest_id for future MAC-less lookups
@@ -476,6 +480,7 @@ async def full_sync() -> dict:
     if not await is_platform_enabled("ruckus_one"):
         return {"status": "disabled"}
     results = {}
+    _synced_macs.clear()
     try:
         results["wlans"]   = await sync_wlans()
         results["venues"]  = await sync_venues()
@@ -484,6 +489,12 @@ async def full_sync() -> dict:
         results["aliases"] = await sync_aliases()
 
         redis = await get_redis()
+        # One snapshot per client, from its final merged state
+        for mac in _synced_macs:
+            raw = await redis.get(f"ruckus:mac:{mac}")
+            if raw:
+                await write_snapshot(mac, json.loads(raw), source="ruckus_one")
+
         await redis.set("ruckus:last_sync", datetime.now(timezone.utc).isoformat())
         log.info(f"Full sync complete: {results}")
     except Exception as e:

@@ -1,0 +1,10 @@
+[Unit]
+Description=Bloodhound — reload nginx when the TLS certificate changes
+
+# The backend (in Docker, no access to the host's nginx) writes the new
+# certificate here from Settings → SSL; this unit reloads nginx on the host.
+[Path]
+PathChanged=/opt/bloodhound/ssl/bloodhound.crt
+
+[Install]
+WantedBy=multi-user.target

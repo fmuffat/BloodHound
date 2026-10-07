@@ -48,6 +48,9 @@ class SearchResponse(BaseModel):
     returned: int
     query:    str
     error:    Optional[str] = None
+    # True when more matches may exist beyond the scanned window
+    # (enrichment-only filters such as username or venue)
+    truncated: bool = False
 
 
 class SearchRequest(BaseModel):

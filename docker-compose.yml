@@ -21,7 +21,8 @@ services:
       - discovery.type=single-node
       - bootstrap.memory_lock=true
       - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
-      - plugins.security.disabled=true          # désactivé en environnement de démo
+      # Pas d'auth OpenSearch : le port n'est exposé que sur 127.0.0.1 (voir ports)
+      - plugins.security.disabled=true
     ulimits:
       memlock:
         soft: -1
@@ -31,8 +32,9 @@ services:
         hard: 65536
     volumes:
       - opensearch_data:/usr/share/opensearch/data
+    # Loopback only — Docker bypasses ufw, so never publish on 0.0.0.0.
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"
     networks:
       - syslog_net
 
@@ -45,10 +47,11 @@ services:
       - mongodb
       - opensearch
     environment:
-      # Mot de passe admin : changer en prod
-      # Générer le hash : echo -n "yourpassword" | sha256sum
-      GRAYLOG_PASSWORD_SECRET: "somepasswordsecret1234567890abcdef"
-      GRAYLOG_ROOT_PASSWORD_SHA2: "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"  # admin
+      # Secrets propres à chaque appliance, générés au premier boot par
+      # firstboot.sh dans ../.env. Les valeurs par défaut (admin/admin)
+      # ne servent qu'en dev.
+      GRAYLOG_PASSWORD_SECRET: "${GRAYLOG_PASSWORD_SECRET:-somepasswordsecret1234567890abcdef}"
+      GRAYLOG_ROOT_PASSWORD_SHA2: "${GRAYLOG_ROOT_PASSWORD_SHA2:-8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918}"
       GRAYLOG_HTTP_EXTERNAL_URI: "http://localhost:9000/"
       GRAYLOG_MONGODB_URI: "mongodb://mongodb:27017/graylog"
       GRAYLOG_ELASTICSEARCH_HOSTS: "http://opensearch:9200"
@@ -56,10 +59,9 @@ services:
       # Timezone
       GRAYLOG_ROOT_TIMEZONE: "Europe/Paris"
     ports:
-      - "9000:9000"       # Interface web Graylog
-      - "514:514/udp"     # Syslog UDP (APs Ruckus)
-      - "514:514/tcp"     # Syslog TCP
-      - "12201:12201/udp" # GELF UDP (optionnel)
+      - "127.0.0.1:9000:9000"  # Interface web Graylog — accès via tunnel SSH (voir ADMIN.md)
+      - "514:514/udp"          # Syslog UDP (APs Ruckus)
+      - "514:514/tcp"          # Syslog TCP
     volumes:
       - graylog_data:/usr/share/graylog/data
     networks:
@@ -74,7 +76,7 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"  # utilisé par le worker Unleashed (hôte)
     networks:
       - syslog_net
 
@@ -89,20 +91,19 @@ services:
     environment:
       GRAYLOG_API_URL: "http://graylog:9000/api"
       GRAYLOG_USER: "admin"
-      GRAYLOG_PASSWORD: "admin"
+      GRAYLOG_PASSWORD: "${GRAYLOG_PASSWORD:-admin}"
       REDIS_URL: "redis://redis:6379"
       RUCKUS_ONE_TENANT_ID: "${RUCKUS_ONE_TENANT_ID}"
       RUCKUS_ONE_REGION: "EU"
       RUCKUS_ONE_CLIENT_ID: "${RUCKUS_ONE_CLIENT_ID}"
       RUCKUS_ONE_CLIENT_SECRET: "${RUCKUS_ONE_CLIENT_SECRET}"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"  # nginx (hôte) est le seul point d'entrée
     volumes:
       - ./backend:/app
+      - /opt/bloodhound/ssl:/opt/bloodhound/ssl
     networks:
       - syslog_net
-
-  # ── Frontend React ─────────────────────────────────────────────────────────
 
 volumes:
   mongodb_data:

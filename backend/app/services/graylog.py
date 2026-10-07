@@ -45,7 +45,7 @@ async def _graylog_get(path: str, params: dict | None = None) -> dict:
         return r.json()
 
 
-async def _enrich_log(raw: dict, history_cache: dict | None = None) -> dict:
+async def _enrich_log(raw: dict, hist: dict | None = None) -> dict:
     """Enrich a raw Graylog log with Ruckus and DNS data from Redis."""
     zone_name_raw = raw.get("zone_name", "")
     # R1 sends a GUID (32 hex chars); SmartZone sends a readable zone name;
@@ -138,21 +138,19 @@ async def _enrich_log(raw: dict, history_cache: dict | None = None) -> dict:
         # snapshot may belong to a different platform than this log if the
         # device has roamed between them — only trust ssid/venue when the
         # snapshot's own source matches.
-        if platform_source != "smartzone" and history_cache and mac in history_cache:
-            hist = history_cache[mac]
-            if hist:
-                hist_source_matches = (hist.get("source") is None) or (hist.get("source") == platform_source)
-                entry["hostname"]      = hist.get("hostname", entry["hostname"])
-                if hist_source_matches:
-                    entry["ssid"]      = hist.get("ssid", entry["ssid"])
-                    entry["venue"]     = hist.get("venue", entry["venue"])
-                entry["is_guest"]      = hist.get("is_guest", entry["is_guest"])
-                entry["guest_type"]    = hist.get("guest_type", entry["guest_type"])
-                entry["guest_name"]    = hist.get("guest_name", entry["guest_name"])
-                entry["email"]         = hist.get("email", entry["email"])
-                entry["phone"]         = hist.get("phone", entry["phone"])
-                entry["sponsor_email"] = hist.get("sponsor_email", entry["sponsor_email"])
-                entry["client_label"]  = get_client_label({**hist, "mac": mac})
+        if platform_source != "smartzone" and hist:
+            hist_source_matches = (hist.get("source") is None) or (hist.get("source") == platform_source)
+            entry["hostname"]      = hist.get("hostname", entry["hostname"])
+            if hist_source_matches:
+                entry["ssid"]      = hist.get("ssid", entry["ssid"])
+                entry["venue"]     = hist.get("venue", entry["venue"])
+            entry["is_guest"]      = hist.get("is_guest", entry["is_guest"])
+            entry["guest_type"]    = hist.get("guest_type", entry["guest_type"])
+            entry["guest_name"]    = hist.get("guest_name", entry["guest_name"])
+            entry["email"]         = hist.get("email", entry["email"])
+            entry["phone"]         = hist.get("phone", entry["phone"])
+            entry["sponsor_email"] = hist.get("sponsor_email", entry["sponsor_email"])
+            entry["client_label"]  = get_client_label({**hist, "alias": entry["alias"], "mac": mac})
 
     if platform_source == "smartzone":
         # SmartZone: wlan_id is already the SSID name, zone_name is already the venue
@@ -194,6 +192,60 @@ async def _enrich_log(raw: dict, history_cache: dict | None = None) -> dict:
     return entry
 
 
+# Lucene OR-lists of MACs/WLANs are capped so the query stays under
+# OpenSearch's max_clause_count (1024 by default).
+MAX_PREFILTER_TERMS = 500
+
+# Enrichment-only filters (username, venue, …) can't be expressed in the
+# Graylog query, so matching logs are found by scanning pages of results.
+# This bounds the work for a single request.
+POST_FILTER_PAGE     = 500
+POST_FILTER_MAX_SCAN = 5000
+
+
+def _q(value: str) -> str:
+    """Quote a value as a Lucene phrase, escaping backslashes and double quotes."""
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _parse_ts(ts: str) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except (ValueError, AttributeError):
+        return None
+
+
+async def _scan_keys(r, pattern: str) -> list[str]:
+    """SCAN instead of KEYS — KEYS blocks Redis for the whole keyspace walk."""
+    return [k async for k in r.scan_iter(match=pattern, count=1000)]
+
+
+async def _macs_matching(r, predicate) -> list[str]:
+    """Upper-case MACs from the live client caches whose info matches."""
+    macs = []
+    for pattern, prefix in (("ruckus:mac:*", "ruckus:mac:"), ("sz:mac:*", "sz:mac:")):
+        for key in await _scan_keys(r, pattern):
+            raw = await r.get(key)
+            if not raw:
+                continue
+            try:
+                if predicate(json.loads(raw)):
+                    m = key.replace(prefix, "").upper()
+                    if m not in macs:
+                        macs.append(m)
+            except Exception:
+                pass
+    return macs
+
+
+def _or_clause(field: str, values: list[str], what: str) -> str:
+    if len(values) > MAX_PREFILTER_TERMS:
+        log.warning(f"{what} pre-filter: {len(values)} values, truncated to {MAX_PREFILTER_TERMS}")
+        values = values[:MAX_PREFILTER_TERMS]
+    return "(" + " OR ".join(f"{field}:{_q(v)}" for v in values) + ")"
+
+
 async def search_logs(
     query: str = "*",
     from_dt: datetime | None = None,
@@ -217,12 +269,17 @@ async def search_logs(
     Search Graylog with automatic enrichment.
     Query follows Graylog Lucene syntax.
     """
+    import asyncio
+    from app.services.cache import get_active_platform
+    from app.services.history import get_snapshots_until
+
+    empty = {"logs": [], "total": 0, "returned": 0, "query": "*", "error": None}
 
     # Build Lucene query from structured filters
     parts = []
     if query and query != "*":
         if re.match(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$', query.strip()):
-            parts.append(f'client_mac:"{query.strip().upper()}"')
+            parts.append(f'client_mac:{_q(query.strip().upper())}')
         else:
             parts.append(f"({query})")
 
@@ -231,7 +288,6 @@ async def search_logs(
     # searches (client detail view) — since only one platform is active at a time
     # in Bloodhound; a client's logs from an inactive platform are deliberately
     # hidden, consistent with the rest of the app.
-    from app.services.cache import get_active_platform
     active = await get_active_platform()
     if active == "smartzone":
         # SmartZone zone_name is a readable name — present, but NOT a
@@ -243,192 +299,175 @@ async def search_logs(
     elif active == "unleashed":
         # Unleashed's own syslog format sends no zone_name field at all —
         # this is the actual distinguishing signal versus R1 (GUID) and
-        # SmartZone (readable name), not a shared "GUID" bucket as
-        # previously assumed.
+        # SmartZone (readable name).
         parts.append('NOT _exists_:zone_name')
     if src_ip:
-        parts.append(f'src_ip:"{src_ip}"')
+        parts.append(f'src_ip:{_q(src_ip)}')
     if dst_ip:
-        parts.append(f'dst_ip:"{dst_ip}"')
+        parts.append(f'dst_ip:{_q(dst_ip)}')
     if client_mac:
-        parts.append(f'client_mac:"{client_mac.upper()}"')
+        parts.append(f'client_mac:{_q(client_mac.upper())}')
     if proto:
+        if not re.fullmatch(r"[A-Za-z0-9]+", proto):
+            return {**empty, "error": "Invalid protocol"}
         parts.append(f'proto:{proto.upper()}')
     if dst_port:
-        parts.append(f'dst_port:{dst_port}')
+        parts.append(f'dst_port:{int(dst_port)}')
     if ap_name:
-        parts.append(f'ap_name:"{ap_name}"')
+        parts.append(f'ap_name:{_q(ap_name)}')
+
+    r = await get_redis()
 
     # Pre-filter by SSID: find wlan_id in Redis, filter by wlan_id in Graylog
     if ssid and not client_mac:
-        r = await get_redis()
-        import json as _json
         wlan_ids = []
-        # Search all wlan keys for matching SSID
-        for prefix in ["ruckus:wlan:*", "unleashed:*:wlan:*"]:
-            wlan_keys = await r.keys(prefix)
-            for key in wlan_keys:
+        for pattern in ["ruckus:wlan:*", "unleashed:*:wlan:*"]:
+            for key in await _scan_keys(r, pattern):
                 raw = await r.get(key)
                 if raw:
                     try:
-                        info = _json.loads(raw)
+                        info = json.loads(raw)
                         if ssid.lower() in info.get("ssid", "").lower():
-                            # Extract wlan_id from key
                             wlan_id = key.split(":")[-1]
                             if wlan_id not in wlan_ids:
                                 wlan_ids.append(wlan_id)
                     except Exception:
                         pass
 
-        # SmartZone: wlan_id in Graylog IS the SSID name directly — check sz:wlan_by_name
-        sz_wlan_raw = await r.get(f"sz:wlan_by_name:{ssid}")
-        if sz_wlan_raw and ssid not in wlan_ids:
-            wlan_ids.append(ssid)
-        else:
-            # Even without cache, the SSID name itself may directly be the wlan_id used by SmartZone
-            sz_keys = await r.keys("sz:wlan_by_name:*")
-            for key in sz_keys:
-                name = key.replace("sz:wlan_by_name:", "")
-                if ssid.lower() in name.lower() and name not in wlan_ids:
-                    wlan_ids.append(name)
+        # SmartZone: wlan_id in Graylog IS the SSID name directly
+        for key in await _scan_keys(r, "sz:wlan_by_name:*"):
+            name = key.replace("sz:wlan_by_name:", "")
+            if ssid.lower() in name.lower() and name not in wlan_ids:
+                wlan_ids.append(name)
+
         if wlan_ids:
-            wlan_query = " OR ".join([f'wlan_id:"{w}"' for w in wlan_ids])
-            parts.append(f"({wlan_query})")
+            parts.append(_or_clause("wlan_id", wlan_ids, "SSID"))
         else:
-            # Fallback: search by MAC
-            mac_keys = await r.keys("ruckus:mac:*")
-            ssid_macs = []
-            for key in mac_keys:
-                raw = await r.get(key)
-                if raw:
-                    try:
-                        info = _json.loads(raw)
-                        if ssid.lower() in info.get("ssid", "").lower():
-                            m = key.replace("ruckus:mac:", "").upper()
-                            ssid_macs.append(m)
-                    except Exception:
-                        pass
-            if ssid_macs:
-                mac_query = " OR ".join([f'client_mac:"{m}"' for m in ssid_macs[:50]])
-                parts.append(f"({mac_query})")
-            else:
-                return {"logs": [], "total": 0, "returned": 0, "query": "*", "error": None}
+            # Fallback: MACs whose cached info is on this SSID
+            ssid_macs = await _macs_matching(r, lambda i: ssid.lower() in i.get("ssid", "").lower())
+            if not ssid_macs:
+                return empty
+            parts.append(_or_clause("client_mac", ssid_macs, "SSID"))
 
-    # Pre-filter by is_guest: find guest MACs in Redis
+    # Pre-filter by is_guest: guest MACs from the live caches (all platforms)
     if is_guest is not None and not client_mac and not ssid:
-        r = await get_redis()
-        import json as _json
-        mac_keys = await r.keys("ruckus:mac:*")
-        guest_macs = []
-        for key in mac_keys:
-            raw = await r.get(key)
-            if raw:
-                try:
-                    info = _json.loads(raw)
-                    if info.get("is_guest", False) == is_guest:
-                        m = key.replace("ruckus:mac:", "").upper()
-                        guest_macs.append(m)
-                except Exception:
-                    pass
-        if guest_macs:
-            mac_query = " OR ".join([f'client_mac:"{m}"' for m in guest_macs[:100]])
-            parts.append(f"({mac_query})")
-        else:
-            return {"logs": [], "total": 0, "returned": 0, "query": "*", "error": None}
+        guest_macs = await _macs_matching(r, lambda i: bool(i.get("is_guest", False)) == is_guest)
+        if not guest_macs:
+            return empty
+        parts.append(_or_clause("client_mac", guest_macs, "Guest"))
 
-    lucene_query = " AND ".join(parts) if parts else "*" 
+    lucene_query = " AND ".join(parts) if parts else "*"
 
-    # Build time range params
-    params: dict[str, Any] = {
+    # Time range — no explicit range means "All time", matching the
+    # frontend's DateRangePicker label.
+    now = datetime.now(timezone.utc)
+    base_params: dict[str, Any] = {
         "query": lucene_query,
-        "limit": min(limit, 500),
-        "offset": offset,
-        "sort": "timestamp:desc",
+        "sort":  "timestamp:desc",
+        "from":  (from_dt or datetime(2000, 1, 1, tzinfo=timezone.utc)).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "to":    (to_dt or now).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
     }
+    endpoint = "/search/universal/absolute"
 
-    if from_dt or to_dt:
-        now = datetime.now(timezone.utc)
-        params["from"] = (from_dt or datetime(2020, 1, 1, tzinfo=timezone.utc)).strftime(
-            "%Y-%m-%dT%H:%M:%S.000Z"
-        )
-        params["to"] = (to_dt or now).strftime(
-            "%Y-%m-%dT%H:%M:%S.000Z"
-        )
-        endpoint = "/search/universal/absolute"
-    else:
-        # No explicit range provided. The frontend's DateRangePicker displays
-        # this same null/null state as "All time", so match that label by
-        # searching the full history instead of silently restricting to a
-        # relative 24h window (previous behavior — caused logs to appear
-        # "missing" whenever a platform had no traffic in the last 24h).
-        now = datetime.now(timezone.utc)
-        params["from"] = "2000-01-01T00:00:00.000Z"
-        params["to"]   = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        endpoint = "/search/universal/absolute"
+    async def fetch(page_limit: int, page_offset: int) -> tuple[list, int]:
+        raw_result = await _graylog_get(endpoint, {**base_params, "limit": page_limit, "offset": page_offset})
+        msgs = [m.get("message", m) for m in raw_result.get("messages", [])]
+        return msgs, raw_result.get("total_results", len(msgs))
 
-    # Query Graylog
+    async def enrich(messages: list) -> list:
+        # History: one query per MAC, then the snapshot in effect at each
+        # log's own timestamp (not one reference time for the whole page).
+        newest_by_mac: dict[str, str] = {}
+        for m in messages:
+            mac, ts = m.get("client_mac", ""), m.get("timestamp", "")
+            if mac and ts and ts > newest_by_mac.get(mac, ""):
+                newest_by_mac[mac] = ts
+
+        async def fetch_hist(mac, until):
+            try:
+                snaps = await get_snapshots_until(mac, until)
+            except Exception:
+                snaps = []
+            parsed = []
+            for s in snaps:
+                t = _parse_ts(s.get("snapshot_at", ""))
+                if t:
+                    parsed.append((t, s))
+            return mac, parsed  # newest first
+
+        hist_by_mac = dict(await asyncio.gather(*[fetch_hist(m, t) for m, t in newest_by_mac.items()]))
+
+        def snapshot_for(msg) -> dict | None:
+            log_ts = _parse_ts(msg.get("timestamp", ""))
+            if not log_ts:
+                return None
+            for snap_ts, snap in hist_by_mac.get(msg.get("client_mac", ""), []):
+                if snap_ts <= log_ts:
+                    return snap
+            return None
+
+        # Concurrency limit to avoid exhausting Redis connections
+        semaphore = asyncio.Semaphore(20)
+
+        async def enrich_with_limit(m):
+            async with semaphore:
+                return await _enrich_log(m, snapshot_for(m))
+
+        return list(await asyncio.gather(*[enrich_with_limit(m) for m in messages]))
+
+    def matches(entry: dict) -> bool:
+        if dst_hostname and dst_hostname.lower() not in entry.get("dst_hostname", "").lower():
+            return False
+        if username and username.lower() not in entry.get("username", "").lower():
+            return False
+        if client_label and client_label.lower() not in entry.get("client_label", "").lower():
+            return False
+        if venue and venue.lower() not in entry.get("venue", "").lower():
+            return False
+        return True
+
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    post_filtered = any([dst_hostname, username, client_label, venue])
+
     try:
-        raw_result = await _graylog_get(endpoint, params)
+        if not post_filtered:
+            messages, total = await fetch(limit, offset)
+            results = await enrich(messages)
+            truncated = False
+        else:
+            # These fields only exist after enrichment. Filtering a single
+            # Graylog page made pagination and `total` wrong (matches beyond
+            # the first page were never seen) — scan pages instead, up to a
+            # bound, and paginate over the matches.
+            found: list = []
+            scanned = 0
+            exhausted = False
+            while scanned < POST_FILTER_MAX_SCAN:
+                messages, graylog_total = await fetch(POST_FILTER_PAGE, scanned)
+                if not messages:
+                    exhausted = True
+                    break
+                found.extend(e for e in await enrich(messages) if matches(e))
+                scanned += len(messages)
+                if scanned >= graylog_total:
+                    exhausted = True
+                    break
+                # Enough for this page plus look-ahead for the next one
+                if len(found) > offset + limit:
+                    break
+            results = found[offset:offset + limit]
+            total = len(found)
+            truncated = not exhausted
     except httpx.HTTPStatusError as e:
         log.error(f"Graylog search error: {e.response.status_code} {e.response.text}")
         return {"logs": [], "total": 0, "returned": 0, "query": lucene_query, "error": str(e)}
 
-    messages = raw_result.get("messages", [])
-    total    = raw_result.get("total_results", len(messages))
-
-    # Pre-fetch history snapshots for unique MACs (one query per MAC, not per log)
-    import asyncio
-    from app.services.history import get_snapshot_at
-
-    unique_macs = set()
-    for m in messages:
-        msg = m.get("message", m)
-        mac = msg.get("client_mac", "")
-        if mac:
-            unique_macs.add(mac)
-
-    # Fetch history for all unique MACs in parallel (much fewer queries)
-    history_cache = {}
-    if unique_macs:
-        # Use the earliest timestamp from the results as reference
-        timestamps = [m.get("message", m).get("timestamp", "") for m in messages if m.get("message", m).get("timestamp")]
-        ref_timestamp = min(timestamps) if timestamps else datetime.now(timezone.utc).isoformat()
-
-        async def fetch_hist(mac):
-            try:
-                hist = await get_snapshot_at(mac, ref_timestamp)
-                return mac, hist
-            except Exception:
-                return mac, None
-
-        hist_results = await asyncio.gather(*[fetch_hist(mac) for mac in unique_macs])
-        history_cache = {mac: hist for mac, hist in hist_results}
-
-    # Enrich all logs with concurrency limit to avoid exhausting Redis connections
-    semaphore = asyncio.Semaphore(20)
-
-    async def enrich_with_limit(m):
-        async with semaphore:
-            return await _enrich_log(m.get("message", m), history_cache)
-
-    enriched = await asyncio.gather(*[enrich_with_limit(m) for m in messages])
-
-    # Post-enrichment filters
-    results = list(enriched)
-    if dst_hostname:
-        results = [r for r in results if dst_hostname.lower() in r.get("dst_hostname", "").lower()]
-    if username:
-        results = [r for r in results if username.lower() in r.get("username", "").lower()]
-    if client_label:
-        results = [r for r in results if client_label.lower() in r.get("client_label", "").lower()]
-    if venue:
-        results = [r for r in results if venue.lower() in r.get("venue", "").lower()]
-    # SSID post-filter removed — pre-filter by MAC is sufficient and more accurate
-    # is_guest post-filter removed — handled via pre-filter above
-
     return {
-        "logs":     results,
-        "total":    total,
-        "returned": len(results),
-        "query":    lucene_query,
+        "logs":      results,
+        "total":     total,
+        "returned":  len(results),
+        "query":     lucene_query,
+        # True when more matches may exist beyond what was scanned (post-filters)
+        "truncated": truncated,
     }
