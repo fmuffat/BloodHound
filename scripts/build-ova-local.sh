@@ -37,7 +37,9 @@ say() { printf '\033[1;33m==>\033[0m %s\n' "$*"; }
 
 # ── Mode 1: from the PC, drive a remote build host ──────────────────────────
 if [ -n "$HOST" ]; then
-  SSH=(${BH_SSH:-ssh} -o BatchMode=yes)
+  # Keep-alives: long silent steps (zstd ~15 min) must not let an idle
+  # connection be cut, which would kill the remote build with it.
+  SSH=(${BH_SSH:-ssh} -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=20)
   [ -n "$KEY" ] && SSH+=(-i "$KEY")
   # Working tree including uncommitted changes to tracked files; LF endings
   # (a plain `git archive` on Windows converts to CRLF and breaks the scripts).
