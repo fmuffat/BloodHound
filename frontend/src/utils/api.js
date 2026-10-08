@@ -55,6 +55,13 @@ export const api = {
   changePassword: (p) => req('POST', '/auth/change-password', p),
   eraseClient: (mac, password) => req('POST', '/clients/erase', { mac, password }),
 
+  // Accounts (administrators only)
+  listUsers: ()                  => req('GET',    '/users'),
+  createUser: (username, role)   => req('POST',   '/users', { username, role }),
+  setUserRole: (username, role)  => req('PUT',    `/users/${encodeURIComponent(username)}/role`, { role }),
+  resetUserPassword: (username)  => req('POST',   `/users/${encodeURIComponent(username)}/reset-password`),
+  deleteUser: (username)         => req('DELETE', `/users/${encodeURIComponent(username)}`),
+
   // MAC timeline
   getMacTimeline: (mac) => req('GET', `/lookup/mac/${mac}/timeline`),
 

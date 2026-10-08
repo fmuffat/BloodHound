@@ -104,7 +104,8 @@ export default function Layout({ user, onLogout }) {
         {/* Top bar with user + logout */}
         <div className="topbar">
           <div className="topbar-user">
-            <span className="topbar-username">{user}</span>
+            <span className="topbar-username">{user.username}</span>
+            {user.role !== 'admin' && <span className="topbar-role">read-only</span>}
             <button className="btn-logout" onClick={onLogout}>
               Sign out
             </button>

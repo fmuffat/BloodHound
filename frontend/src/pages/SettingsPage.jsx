@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { api } from '../utils/api'
 import { usePrefs } from '../utils/PrefsContext'
+import { useUser, isAdmin } from '../utils/UserContext'
+import UsersPanel from './UsersPanel'
 import './SettingsPage.css'
 
 const REGIONS = [
@@ -402,18 +404,13 @@ function SslUploadPanel() {
 // ── Security Panel ───────────────────────────────────────────────────────────
 
 function SecurityPanel() {
+  const me = useUser()
   const [currentPwd, setCurrentPwd]   = useState('')
-  const [newUser, setNewUser]         = useState('')
   const [newPwd, setNewPwd]           = useState('')
   const [confirmPwd, setConfirmPwd]   = useState('')
   const [saving, setSaving]           = useState(false)
   const [saved, setSaved]             = useState(false)
   const [error, setError]             = useState(null)
-  const [currentUser, setCurrentUser] = useState('')
-
-  useEffect(() => {
-    api.getMe().then(d => { setCurrentUser(d.username); setNewUser(d.username) }).catch(() => {})
-  }, [])
 
   const handleSave = async () => {
     if (!currentPwd) { setError('Please enter your current password'); return }
@@ -427,13 +424,11 @@ function SecurityPanel() {
       await api.changePassword({
         current_password: currentPwd,
         new_password: newPwd,
-        new_username: newUser || undefined,
       })
       setSaved(true)
       setCurrentPwd('')
       setNewPwd('')
       setConfirmPwd('')
-      setNewUser('')
       setTimeout(() => setSaved(false), 3000)
     } catch (e) {
       setError(e.message === 'API error 401' ? 'Current password is incorrect' : (e.detail || e.message))
@@ -447,19 +442,10 @@ function SecurityPanel() {
 
   return (
     <div className="settings-panel">
-      <div className="panel-title">Security</div>
-      <div className="panel-desc">Change the Bloodhound login credentials.</div>
-
-      <div className="form-section">
-        <div className="form-label">Change username</div>
-        <input
-          className="form-input"
-          value={newUser}
-          onChange={e => setNewUser(e.target.value)}
-          placeholder={currentUser}
-          autoComplete="username"
-        />
-        <div className="form-hint">Current username: <strong>{currentUser}</strong></div>
+      <div className="panel-title">Password</div>
+      <div className="panel-desc">
+        Change the password of your account, <strong>{me?.username}</strong>.
+        Your other open sessions are signed out.
       </div>
 
       <div className="form-section">
@@ -481,7 +467,7 @@ function SecurityPanel() {
           type="password"
           value={newPwd}
           onChange={e => setNewPwd(e.target.value)}
-          placeholder="Min. 6 characters"
+          placeholder="Min. 8 characters"
           autoComplete="new-password"
         />
       </div>
@@ -501,11 +487,11 @@ function SecurityPanel() {
       </div>
 
       {error && <div className="form-error">⚠ {error}</div>}
-      {saved && <div className="form-success">✓ Credentials updated successfully</div>}
+      {saved && <div className="form-success">✓ Password changed</div>}
 
       <div className="form-actions">
         <button className="btn-primary" onClick={handleSave} disabled={saving || pwdMismatch}>
-          {saving ? 'Saving...' : 'Change credentials'}
+          {saving ? 'Saving...' : 'Change password'}
         </button>
       </div>
     </div>
@@ -657,6 +643,18 @@ function SmartZonePanel({ onEnabledChange }) {
 // ── Main Settings Page ────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
+  const user = useUser()
+  if (!isAdmin(user)) {
+    return (
+      <div className="settings-page">
+        <div className="settings-content"><SecurityPanel /></div>
+      </div>
+    )
+  }
+  return <AdminSettingsPage />
+}
+
+function AdminSettingsPage() {
   const [activeTab, setActiveTab] = useState('ruckus_one')
   const [r1, setR1]               = useState({ region: 'EU', tenant_id: '', client_id: '', client_secret: '' })
   const [saving, setSaving]       = useState(false)
@@ -828,6 +826,12 @@ export default function SettingsPage() {
               <span className="tab-name">Password</span>
             </div>
           </button>
+          <button className={`tab-item ${activeTab === 'users' ? 'active' : ''}`} onClick={() => setActiveTab('users')}>
+            <span className="tab-icon">👥</span>
+            <div className="tab-info">
+              <span className="tab-name">Users</span>
+            </div>
+          </button>
           <button className={`tab-item ${activeTab === 'ssl' ? 'active' : ''}`} onClick={() => setActiveTab('ssl')}>
             <span className="tab-icon">🔐</span>
             <div className="tab-info">
@@ -916,6 +920,7 @@ export default function SettingsPage() {
           {activeTab === 'preferences' && <PreferencesPanel />}
           {activeTab === 'disk' && <DiskPanel />}
           {activeTab === 'security' && <SecurityPanel />}
+          {activeTab === 'users' && <UsersPanel />}
           {activeTab === 'ssl' && <SslPanel />}
         </div>
       </div>

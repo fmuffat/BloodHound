@@ -2,6 +2,7 @@ import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { api } from '../utils/api'
 import { usePrefs } from '../utils/PrefsContext'
+import { useUser, isAdmin } from '../utils/UserContext'
 import './InvestigationPage.css'
 import './EventInvestigationPage.css'
 
@@ -154,6 +155,7 @@ function EraseClientModal({ mac, onConfirm, onClose, loading, error, result }) {
 }
 
 export default function EventInvestigationPage() {
+  const canErase = isAdmin(useUser())   // read-only accounts cannot erase
   const { mac } = useParams()
   const { timezone = 'Europe/Paris' } = usePrefs() || {}
   const [searchParams] = useSearchParams()
@@ -301,12 +303,12 @@ export default function EventInvestigationPage() {
             </>}
           </div>
 
-          <div style={{display:'flex', justifyContent:'flex-end', marginTop:8}}>
+          {canErase && <div style={{display:'flex', justifyContent:'flex-end', marginTop:8}}>
             <button onClick={() => setShowErase(true)}
               style={{padding:'6px 12px', background:'none', border:'1px solid var(--red)', borderRadius:4, color:'var(--red)', fontFamily:'var(--mono)', fontSize:11, cursor:'pointer'}}>
               Erase all logs for this client
             </button>
-          </div>
+          </div>}
 
           {clientInfo.is_guest && !isHostGuest && (
             <div className="guest-block">

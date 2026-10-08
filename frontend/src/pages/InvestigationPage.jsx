@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
 import { usePrefs } from '../utils/PrefsContext'
+import { useUser, isAdmin } from '../utils/UserContext'
 import DateRangePicker from '../components/DateRangePicker'
 
 const PROTO_CLASS = { TCP: 'badge-tcp', UDP: 'badge-udp', ICMP: 'badge-icmp' }
@@ -96,6 +97,7 @@ function EraseClientModal({ mac, onConfirm, onClose, loading, error, result }) {
 }
 
 export default function InvestigationPage() {
+  const canErase = isAdmin(useUser())   // read-only accounts cannot erase
   const { mac } = useParams()
   const { timezone = 'Europe/Paris' } = usePrefs() || {}
   const navigate = useNavigate()
@@ -270,12 +272,12 @@ export default function InvestigationPage() {
             </>}
           </div>
 
-          <div style={{display:'flex', justifyContent:'flex-end', marginTop:8}}>
+          {canErase && <div style={{display:'flex', justifyContent:'flex-end', marginTop:8}}>
             <button onClick={() => setShowErase(true)}
               style={{padding:'6px 12px', background:'none', border:'1px solid var(--red)', borderRadius:4, color:'var(--red)', fontFamily:'var(--mono)', fontSize:11, cursor:'pointer'}}>
               Erase all logs for this client
             </button>
-          </div>
+          </div>}
 
           {clientInfo.is_guest && !isHostGuest && (
             <div className="guest-block">

@@ -132,7 +132,7 @@ echo "   Web interface   https://$IP/"
 echo "                   (self-signed certificate: accept the browser warning)"
 if [ "$UPGRADE" = 0 ]; then
   echo "   User            bloodhound"
-  echo "   Password        password   (change it now: Settings → Password)"
+  echo "   Password        password   (a new one is required at first sign-in)"
 fi
 echo
 echo "   Syslog          point the APs / controller to $IP, UDP 514"

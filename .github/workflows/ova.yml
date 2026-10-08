@@ -70,6 +70,11 @@ jobs:
           done
           curl -sk -c jar -H 'Content-Type: application/json' \
             -d '{"username":"bloodhound","password":"password"}' https://127.0.0.1/api/v1/auth/login | tee login.json
+          # The default password must be replaced before anything else is allowed
+          code="$(curl -sk -b jar -o /dev/null -w '%{http_code}' https://127.0.0.1/api/v1/search)"
+          [ "$code" = 403 ] || { echo "default password not forced to change (search -> $code)"; exit 1; }
+          curl -sk -b jar -c jar -H 'Content-Type: application/json' \
+            -d '{"current_password":"password","new_password":"E2e-web-12345"}' https://127.0.0.1/api/v1/auth/change-password
           for i in $(seq 1 30); do
             curl -sk -b jar "https://127.0.0.1/api/v1/search?client_mac=$MAC" > search.json
             python3 - <<'EOF' && exit 0

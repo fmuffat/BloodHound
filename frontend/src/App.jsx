@@ -6,7 +6,9 @@ import InvestigationPage from './pages/InvestigationPage'
 import EventInvestigationPage from './pages/EventInvestigationPage'
 import SettingsPage from './pages/SettingsPage'
 import LoginPage from './pages/LoginPage'
+import ForcePasswordPage from './pages/ForcePasswordPage'
 import { PrefsProvider } from './utils/PrefsContext'
+import { UserProvider } from './utils/UserContext'
 import { api } from './utils/api'
 
 const INACTIVITY_TIMEOUT = 30 * 60 * 1000 // 30 minutes
@@ -46,12 +48,13 @@ export default function App() {
     }
   }, [user, resetTimer])
 
+  // The account (username, role, must_change_password) comes from the server
+  const refreshUser = useCallback(() =>
+    api.getMe().then(setUser).catch(() => setUser(null)), [])
+
   useEffect(() => {
-    api.getMe()
-      .then(data => setUser(data.username))
-      .catch(() => setUser(null))
-      .finally(() => setChecking(false))
-  }, [])
+    refreshUser().finally(() => setChecking(false))
+  }, [refreshUser])
 
   if (checking) {
     return (
@@ -65,9 +68,15 @@ export default function App() {
     )
   }
 
-  if (!user) return <LoginPage onLogin={setUser} />
+  if (!user) return <LoginPage onLogin={refreshUser} />
+
+  // New account or reset password: a personal password is required first
+  if (user.must_change_password) {
+    return <ForcePasswordPage user={user} onDone={refreshUser} onLogout={doLogout} />
+  }
 
   return (
+    <UserProvider value={user}>
     <PrefsProvider>
       {warning && (
         <div style={{
@@ -96,5 +105,6 @@ export default function App() {
         </Route>
       </Routes>
     </PrefsProvider>
+    </UserProvider>
   )
 }

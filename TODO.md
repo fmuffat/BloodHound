@@ -54,8 +54,10 @@ Priority: **P1** = needed soon, **P2** = strong value, **P3** = later.
       changing it on the AP.
 - [ ] P1 Dev VM: `sudo systemctl restart bloodhound-unleashed` (new worker
       code) and remove any password from the installed unit file.
-- [ ] P2 Force a password change at first web sign-in on non-appliance installs
+- [x] P2 Force a password change at first web sign-in on non-appliance installs
       (default `bloodhound` / `password`).
+- [x] P1 Read-only accounts (admin / viewer roles, Settings → Users), as in sFlow Analytics.
+- [ ] P2 Sign-in log (successes / failures, per account) in Settings → Users.
 - [ ] P3 Replace remaining `KEYS` calls (`/options`, `/status`) with `SCAN`.
 
 ## Dev environment

@@ -9,9 +9,12 @@
    `admin` system account and the password of the web user `bloodhound`.
    It then installs the application (about 5 minutes).
 3. Open `https://<appliance-ip>/` and sign in as `bloodhound`.
-4. **Settings**: choose the WiFi platform (Ruckus One, Unleashed or
+4. **Settings → Users**: create accounts for your colleagues — *Administrator*
+   or *Read-only* (search, investigations and exports only). Each new account
+   gets a random password and chooses its own at first sign-in.
+5. **Settings**: choose the WiFi platform (Ruckus One, Unleashed or
    SmartZone) and enter its credentials.
-5. Point the syslog of the APs / controller to `<appliance-ip>`, UDP 514.
+6. Point the syslog of the APs / controller to `<appliance-ip>`, UDP 514.
 
 Console menu (status, network, passwords, restart…): log in as `admin` on the
 console or over SSH, then `sudo bloodhound-console`.

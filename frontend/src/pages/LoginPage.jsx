@@ -17,9 +17,11 @@ export default function LoginPage({ onLogin }) {
     setError(null)
     try {
       await api.login(username, password)
-      onLogin(username)
+      await onLogin()
     } catch (e) {
-      setError('Invalid username or password')
+      setError(e.status === 429
+        ? 'Too many failed attempts — try again in 15 minutes'
+        : 'Invalid username or password')
     } finally {
       setLoading(false)
     }
