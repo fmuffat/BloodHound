@@ -37,3 +37,6 @@ Thumbs.db
 
 # Backups produced by clear-logs.sh / factory-reset.sh
 *.tar.gz
+
+# UI captures (scripts/ui-screenshots.sh)
+screenshots/
