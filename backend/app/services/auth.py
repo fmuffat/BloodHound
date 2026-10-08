@@ -245,6 +245,63 @@ async def record_login(username: str) -> None:
         pass
 
 
+# ── Sign-in log (as in sFlow Analytics) ──────────────────────────────────────
+# Every sign-in attempt, successful or not: when, which account, from where,
+# result and reason. Newest first in a Redis list; kept LOGIN_LOG_DAYS days
+# (purged by the daily job) and at most LOGIN_LOG_MAX entries.
+LOGIN_LOG_KEY  = "auth:login_events"
+LOGIN_LOG_DAYS = 180
+LOGIN_LOG_MAX  = 100_000
+
+
+async def log_login(username: str, client: str, ok: bool, detail: str = "") -> None:
+    r = await get_redis()
+    event = {"at": _now(), "username": (username or "")[:64], "client": client, "ok": ok, "detail": detail}
+    await r.lpush(LOGIN_LOG_KEY, json.dumps(event))
+    await r.ltrim(LOGIN_LOG_KEY, 0, LOGIN_LOG_MAX - 1)
+
+
+async def login_events(limit: int = 200, failed_only: bool = False) -> dict:
+    """Most recent sign-in events, and a summary of the last 24 hours."""
+    r = await get_redis()
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds")
+    items, total, failed, failed_clients = [], 0, 0, set()
+    # Newest first: stop reading once both the page and the 24 h window are done
+    start, chunk = 0, 1000
+    while True:
+        raw = await r.lrange(LOGIN_LOG_KEY, start, start + chunk - 1)
+        if not raw:
+            break
+        for line in raw:
+            e = json.loads(line)
+            if e["at"] >= since:
+                total += 1
+                if not e["ok"]:
+                    failed += 1
+                    failed_clients.add(e["client"])
+            if len(items) < limit and (e["ok"] is False or not failed_only):
+                items.append(e)
+        if len(items) >= limit and json.loads(raw[-1])["at"] < since:
+            break
+        start += chunk
+    return {"items": items,
+            "last_24h": {"total": total, "failed": failed, "failed_clients": len(failed_clients)},
+            "retention_days": LOGIN_LOG_DAYS}
+
+
+async def purge_login_events() -> int:
+    """Drop events older than LOGIN_LOG_DAYS (oldest are at the tail)."""
+    r = await get_redis()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=LOGIN_LOG_DAYS)).isoformat(timespec="seconds")
+    removed = 0
+    while True:
+        oldest = await r.lindex(LOGIN_LOG_KEY, -1)
+        if not oldest or json.loads(oldest)["at"] >= cutoff:
+            return removed
+        await r.rpop(LOGIN_LOG_KEY)
+        removed += 1
+
+
 # ── Login throttling ─────────────────────────────────────────────────────────
 
 async def is_login_blocked(client_ip: str) -> bool:

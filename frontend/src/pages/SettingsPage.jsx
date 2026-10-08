@@ -850,7 +850,7 @@ function AdminSettingsPage() {
           <button className={`tab-item ${activeTab === 'users' ? 'active' : ''}`} onClick={() => setActiveTab('users')}>
             <span className="tab-icon">👥</span>
             <div className="tab-info">
-              <span className="tab-name">Users</span>
+              <span className="tab-name">Users &amp; sign-ins</span>
             </div>
           </button>
           <button className={`tab-item ${activeTab === 'ssl' ? 'active' : ''}`} onClick={() => setActiveTab('ssl')}>

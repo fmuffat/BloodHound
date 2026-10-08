@@ -61,6 +61,7 @@ export const api = {
   setUserRole: (username, role)  => req('PUT',    `/users/${encodeURIComponent(username)}/role`, { role }),
   resetUserPassword: (username)  => req('POST',   `/users/${encodeURIComponent(username)}/reset-password`),
   deleteUser: (username)         => req('DELETE', `/users/${encodeURIComponent(username)}`),
+  listLogins: (failedOnly)       => req('GET',    '/users/logins', null, { limit: 200, failed_only: failedOnly ? 'true' : null }),
 
   // MAC timeline
   getMacTimeline: (mac) => req('GET', `/lookup/mac/${mac}/timeline`),

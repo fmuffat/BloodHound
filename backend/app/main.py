@@ -41,6 +41,12 @@ async def daily_purge():
         log.info(f"Daily purge complete: {result}")
     except Exception as e:
         log.error(f"Daily purge failed: {e}")
+    try:
+        from app.services.auth import purge_login_events, LOGIN_LOG_DAYS
+        removed = await purge_login_events()
+        log.info(f"Sign-in log: {removed} events older than {LOGIN_LOG_DAYS} days removed")
+    except Exception as e:
+        log.error(f"Sign-in log purge failed: {e}")
 
 
 @asynccontextmanager

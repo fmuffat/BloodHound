@@ -816,22 +816,26 @@ def _require_log_manager(request: Request) -> dict:
 async def login(request: Request, payload: dict = Body(...)):
     from app.services.auth import (
         verify_credentials, is_login_blocked, record_failed_login, clear_failed_logins,
-        record_login, public,
+        record_login, public, log_login, get_user,
     )
     username = payload.get("username", "")
     password = payload.get("password", "")
     ip = _client_ip(request)
 
     if await is_login_blocked(ip):
+        await log_login(username, ip, False, "blocked: too many failed attempts")
         raise HTTPException(status_code=429, detail="Too many failed attempts, try again later")
 
     user = await verify_credentials(username, password)
     if not user:
         await record_failed_login(ip)
+        reason = "wrong password" if await get_user(username) else "unknown account"
+        await log_login(username, ip, False, reason)
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     await clear_failed_logins(ip)
     await record_login(user["username"])
+    await log_login(user["username"], ip, True, user["role"])
     resp = JSONResponse({"status": "ok", **public(user)})
     _set_session_cookie(resp, user)
     return resp
@@ -885,6 +889,15 @@ async def users_list(request: Request):
     from app.services.auth import list_users, public, ROLES
     _require_admin(request)
     return {"items": [public(u) for u in await list_users()], "roles": list(ROLES)}
+
+
+@router.get("/users/logins")
+async def users_logins(request: Request, limit: int = Query(default=200, ge=1, le=2000),
+                       failed_only: bool = Query(default=False)):
+    """Sign-in log: successes and failures, newest first (kept 180 days)."""
+    from app.services.auth import login_events
+    _require_admin(request)
+    return await login_events(limit, failed_only)
 
 
 @router.post("/users")

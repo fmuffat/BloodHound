@@ -58,7 +58,7 @@ Priority: **P1** = needed soon, **P2** = strong value, **P3** = later.
       (default `bloodhound` / `password`).
 - [x] P1 Accounts with roles (Settings → Users), as in sFlow Analytics: administrator,
       logs manager (erase / retention / purge, no server administration), read-only.
-- [ ] P2 Sign-in log (successes / failures, per account) in Settings → Users.
+- [x] P2 Sign-in log (successes / failures, per account) in Settings → Users & sign-ins, kept 180 days.
 - [ ] P3 Replace remaining `KEYS` calls (`/options`, `/status`) with `SCAN`.
 
 ## Dev environment
