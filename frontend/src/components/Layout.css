@@ -141,8 +141,12 @@
 }
 
 .logo-img {
+  /* Square close-up of the dog (bloodhound-sidebar.webp), shown 4:3,
+     centred on the eyes and the magnifier */
   width: 100%;
-  height: auto;
+  height: 170px;
+  object-fit: cover;
+  object-position: 50% 45%;
   display: block;
 }
 
