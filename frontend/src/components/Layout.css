@@ -15,7 +15,7 @@
   flex-shrink: 0;
   background: var(--nav-bg);
   color: var(--nav-text);
-  border-right: 1px solid var(--nav-border);
+  overflow: hidden;   /* nothing may spill over the main area */
   display: flex;
   flex-direction: column;
   padding: 0;
@@ -141,8 +141,7 @@
 }
 
 .logo-img {
-  width: 120%;
-  margin-left: -10%;
+  width: 100%;
   height: auto;
   display: block;
 }

@@ -776,7 +776,7 @@ function AdminSettingsPage() {
   return (
     <div className="settings-page">
       <div className="settings-header">
-        <span className="settings-title">SETTINGS</span>
+        <span className="settings-title">Settings</span>
       </div>
 
       <div className="platform-selector">
