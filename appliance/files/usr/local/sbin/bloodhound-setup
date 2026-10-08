@@ -95,8 +95,15 @@ if [ -n "$NTP_NEW" ]; then
   printf '[Time]\nNTP=%s\n' "$NTP_NEW" >/etc/systemd/timesyncd.conf.d/bloodhound.conf
   systemctl restart systemd-timesyncd
 fi
+ADMIN_MSG=""
 if [ -n "$ADMIN_PASSWORD" ]; then
-  echo "admin:$ADMIN_PASSWORD" | chpasswd && passwd -u admin >/dev/null
+  if echo "admin:$ADMIN_PASSWORD" | chpasswd 2>>"$LOG" && passwd -u admin >/dev/null; then
+    log "admin password set"
+  else
+    # Never fail silently: without it the console/SSH account stays locked
+    log "admin password NOT set"
+    ADMIN_MSG="\n\nWARNING: the password of \"admin\" could not be set (see $LOG)."
+  fi
 fi
 unset ADMIN_PASSWORD
 log "host=$HOSTNAME_NEW tz=$TZ_NEW ntp=$NTP_NEW"
@@ -119,7 +126,7 @@ if (cd "$BH_PKG" && BH_DIR="$BH_DIR" BH_WAIT=1200 ./install.sh) >>"$LOG" 2>&1; t
   /usr/local/sbin/bloodhound-issue
   log "setup done"
   IP="$(current_ip)"
-  MSG="Bloodhound is ready.\n\nWeb interface:  https://$IP/\nUser:           bloodhound\nPassword:       $WEB_MSG\n\nThen, in Settings, choose the WiFi platform\n(Ruckus One, Unleashed or SmartZone) and its credentials.\n\nSyslog: point the APs / controller to $IP, UDP 514.\n\nConsole menu: log in as \"admin\", then: sudo bloodhound-console"
+  MSG="Bloodhound is ready.\n\nWeb interface:  https://$IP/\nUser:           bloodhound\nPassword:       $WEB_MSG\n\nThen, in Settings, choose the WiFi platform\n(Ruckus One, Unleashed or SmartZone) and its credentials.\n\nSyslog: point the APs / controller to $IP, UDP 514.\n\nConsole menu: log in as \"admin\", then: sudo bloodhound-console$ADMIN_MSG"
   [ "$UNATTENDED" = 0 ] && info "$MSG" 22
 else
   log "install failed"

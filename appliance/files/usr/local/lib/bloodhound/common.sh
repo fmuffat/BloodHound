@@ -32,7 +32,9 @@ ask_new_password() {
     p1=$(askpw "$label ($min characters minimum)") || return 1
     p2=$(askpw "Same password again") || return 1
     [ "$p1" = "$p2" ] && [ "${#p1}" -ge "$min" ] && { printf '%s' "$p1"; return 0; }
-    info "The passwords differ or are shorter than $min characters." 8
+    # >&2: whiptail draws the message box on stdout, which is captured as the
+    # password by the caller ($(ask_new_password ...)) — it must go to the screen.
+    info "The passwords differ or are shorter than $min characters." 8 >&2
   done
 }
 
