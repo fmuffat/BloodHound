@@ -62,7 +62,15 @@ sysctl -q --system >/dev/null 2>&1 || true
 
 # --- images ------------------------------------------------------------------------------
 say "Loading the images (a few minutes)"
-gunzip -c "$PKG/images.tar.gz" | docker load -q >/dev/null
+if [ -f "$PKG/images.tar.zst" ]; then
+  if ! command -v zstd >/dev/null 2>&1; then
+    command -v apt-get >/dev/null 2>&1 && apt-get install -y -qq zstd >/dev/null 2>&1
+    command -v zstd >/dev/null 2>&1 || die "zstd is required to load the images (package zstd)"
+  fi
+  zstd -dc --long=27 "$PKG/images.tar.zst" | docker load -q >/dev/null
+else
+  gunzip -c "$PKG/images.tar.gz" | docker load -q >/dev/null   # packages built before 1.1
+fi
 ok "images loaded"
 
 # --- files and configuration ---------------------------------------------------------------

@@ -115,7 +115,7 @@ systemctl enable --now containerd docker >>"$LOG" 2>&1
 
 echo "  Installing Bloodhound (about 5 minutes)..."
 if (cd "$BH_PKG" && BH_DIR="$BH_DIR" BH_WAIT=1200 ./install.sh) >>"$LOG" 2>&1; then
-  rm -f "$BH_PKG/images.tar.gz"   # loaded into Docker; frees space on the system disk
+  rm -f "$BH_PKG"/images.tar.*   # loaded into Docker; frees space on the system disk
   if [ -n "$WEB_PASSWORD" ]; then
     set_web_password "$WEB_PASSWORD" && WEB_MSG="the password you chose" || WEB_MSG="password (could not be changed — do it in Settings)"
   else

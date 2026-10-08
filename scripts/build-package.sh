@@ -27,11 +27,15 @@ cp packaging/graylog/* "$OUT/graylog/"   # Ruckus parsing rule (pipeline source)
 echo "$VERSION" > "$OUT/VERSION"
 chmod 755 "$OUT"/*.sh
 
-echo "==> Saving images"
-docker save "${THIRD_PARTY[@]}" "bloodhound/backend:$VERSION" "bloodhound/web:$VERSION" \
-  | gzip -1 > "$OUT/images.tar.gz"
+echo "==> Saving images (uncompressed layers + zstd: keeps the OVA under 2 GiB)"
+command -v zstd >/dev/null || { echo "zstd is required" >&2; exit 1; }
+docker save "${THIRD_PARTY[@]}" "bloodhound/backend:$VERSION" "bloodhound/web:$VERSION" -o "dist/images-$VERSION.tar"
+python3 scripts/repack-images.py "dist/images-$VERSION.tar" "dist/images-$VERSION-raw.tar"
+rm -f "dist/images-$VERSION.tar"
+zstd -19 --long=27 -T0 -q --rm "dist/images-$VERSION-raw.tar" -o "$OUT/images.tar.zst"
+echo "    images.tar.zst: $(du -h "$OUT/images.tar.zst" | cut -f1)"
 
-tar czf "dist/$NAME.tar.gz" -C dist "$NAME"
+tar czf "dist/$NAME.tar.gz" -C dist "$NAME"   # the images inside are already compressed
 (cd dist && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
 rm -rf "$OUT"
 echo "==> dist/$NAME.tar.gz ($(du -h "dist/$NAME.tar.gz" | cut -f1))"

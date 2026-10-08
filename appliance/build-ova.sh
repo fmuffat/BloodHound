@@ -19,7 +19,7 @@ OUT="${OUT:-dist}"
 CPUS="${CPUS:-4}" MEM_MB="${MEM_MB:-8192}" SYS_GB="${SYS_GB:-30}" DATA_GB="${DATA_GB:-150}"
 BASE_URL="https://cloud-images.ubuntu.com/releases/noble/release"
 BASE_IMG="ubuntu-24.04-server-cloudimg-amd64.img"
-PACKAGES="docker.io docker-compose-v2 open-vm-tools whiptail cloud-guest-utils curl python3"
+PACKAGES="docker.io docker-compose-v2 open-vm-tools whiptail cloud-guest-utils curl python3 zstd"
 # The image is customized offline (the libguestfs appliance has no network here): the packages
 # are downloaded beforehand in a throw-away ubuntu:24.04 container and installed from files.
 export LIBGUESTFS_BACKEND=direct
@@ -64,6 +64,7 @@ virt-customize -a "$WORK/system.qcow2" --memsize 2048 --smp 2 --no-logfile --no-
   --run-command 'rm -f /etc/ssh/sshd_config.d/60-cloudimg-settings.conf /etc/ssh/ssh_host_*' \
   --run-command 'systemctl enable bloodhound-issue.service bloodhound-setup.service ssh.service open-vm-tools.service' \
   --hostname bloodhound --timezone UTC \
+  --run-command 'DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq --auto-remove snapd >/dev/null 2>&1 || true; rm -rf /var/lib/snapd /var/cache/snapd /snap' \
   --run-command 'apt-get clean; rm -rf /var/lib/apt/lists/* /var/log/*.log; truncate -s 0 /etc/machine-id; rm -f /var/lib/dbus/machine-id'
 virt-sparsify --in-place "$WORK/system.qcow2" >/dev/null
 

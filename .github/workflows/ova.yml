@@ -162,10 +162,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Release assets are limited to 2 GB each: larger files stay as workflow artifacts
+          # Releases are normally published from an OVA built and tested locally
+          # (scripts/build-ova-local.sh): the tag run then only verifies the
+          # release (package, e2e, boot test) and leaves the published files alone.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already published: verification only"
+            exit 0
+          fi
+          # Release assets are limited to 2 GiB each: larger files stay as workflow artifacts
           files=()
           for f in dist/bloodhound-*.tar.gz dist/bloodhound-*.tar.gz.sha256 dist/bloodhound-*.ova dist/bloodhound-*.ova.sha256; do
-            [ "$(stat -c %s "$f")" -lt 2000000000 ] && files+=("$f") || echo "too large for a release asset: $f"
+            [ "$(stat -c %s "$f")" -lt 2147483648 ] && files+=("$f") || echo "too large for a release asset: $f"
           done
           gh release create "$GITHUB_REF_NAME" --title "Bloodhound ${GITHUB_REF_NAME#v}" \
             --notes "VMware appliance: deploy the .ova (ESXi 7.0+), then open the VM console. Files over 2 GB are in the workflow run artifacts." \
