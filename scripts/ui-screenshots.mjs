@@ -58,6 +58,11 @@ for (const [name, path, tab] of pages) {
     await page.locator(".tab-item", { hasText: tab }).first().click();
     await page.waitForLoadState("networkidle");
   }
+  if (name === "search") {
+    // The search page is empty until a search is run
+    await page.getByRole("button", { name: "Search", exact: true }).click();
+    await page.waitForLoadState("networkidle");
+  }
   await page.waitForTimeout(800);
   await page.screenshot({ path: `${out}/${name}.png`, fullPage: false });
   console.log(`${name}: ${errors.length ? "ERRORS " + errors.join(" | ") : "ok"}`);
