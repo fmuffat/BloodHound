@@ -36,7 +36,7 @@ export default function Layout({ user, onLogout }) {
 
       <aside className="sidebar">
         <div className="sidebar-logo">
-          <img src="/bloodhound-logo.png" alt="Bloodhound" className="logo-img" />
+          <img src="/bloodhound-logo.webp" alt="Bloodhound" className="logo-img" />
           <div className="logo-title">BLOODHOUND</div>
         </div>
 

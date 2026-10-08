@@ -32,7 +32,7 @@ export default function ForcePasswordPage({ user, onDone, onLogout }) {
   return (
     <div className="login-page">
       <div className="login-card">
-        <img src="/bloodhound-logo.png" alt="Bloodhound" className="login-logo" />
+        <img src="/bloodhound-logo.webp" alt="Bloodhound" className="login-logo" />
         <div className="login-title">BLOODHOUND</div>
         <div className="login-subtitle">Choose your password, {user.username}</div>
 
