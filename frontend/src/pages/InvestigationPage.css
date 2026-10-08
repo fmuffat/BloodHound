@@ -196,7 +196,7 @@
 .error-banner {
   margin: 12px 24px;
   padding: 10px 16px;
-  background: #2d0f0f;
+  background: var(--bad-soft);
   border: 1px solid var(--red);
   border-radius: 4px;
   color: var(--red);

@@ -203,7 +203,7 @@
 
 .form-error {
   padding: 10px 14px;
-  background: #2d0f0f;
+  background: var(--bad-soft);
   border: 1px solid var(--red);
   border-radius: 4px;
   color: var(--red);
@@ -214,7 +214,7 @@
 
 .form-success {
   padding: 10px 14px;
-  background: #0f2d1a;
+  background: var(--ok-soft);
   border: 1px solid var(--green);
   border-radius: 4px;
   color: var(--green);
@@ -231,8 +231,8 @@
   font-size: 12px;
 }
 
-.test-ok   { background: #0f2d1a; border: 1px solid var(--green); color: var(--green); }
-.test-fail { background: #2d0f0f; border: 1px solid var(--red);   color: var(--red); }
+.test-ok   { background: var(--ok-soft); border: 1px solid var(--green); color: var(--green); }
+.test-fail { background: var(--bad-soft); border: 1px solid var(--red);   color: var(--red); }
 
 /* Coming soon */
 .coming-soon-content {

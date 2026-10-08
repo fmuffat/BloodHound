@@ -1,20 +1,53 @@
 :root {
-  --bg:          #0a0c0f;
-  --bg-card:     #111318;
-  --bg-hover:    #181c23;
-  --border:      #1e2330;
-  --border-bright: #2a3040;
-  --text:        #e2e8f0;
-  --text-dim:    #b0bec5;
-  --text-faint:  #334155;
-  --accent:      #f97316;
-  --accent-dim:  #7c3912;
-  --green:       #22c55e;
-  --red:         #ef4444;
-  --blue:        #3b82f6;
-  --yellow:      #eab308;
-  --mono:        'IBM Plex Mono', monospace;
-  --sans:        'IBM Plex Sans', sans-serif;
+  /* Palette shared with sFlow Analytics: light, Ruckus orange accent,
+     charcoal navigation. Follows the OS dark mode. */
+  --bg:            #f2f3f5;
+  --bg-card:       #ffffff;
+  --bg-hover:      #f1f3f6;
+  --border:        #dcdfe4;
+  --border-bright: #c5cad1;
+  --text:          #22262b;
+  --text-dim:      #65707c;
+  --text-faint:    #9aa4af;
+  --accent:        #f58220;
+  --accent-dim:    #fdebdc;
+  --green:         #3f9c35;
+  --red:           #d9383a;
+  --blue:          #2b6cb0;
+  --yellow:        #e8a317;
+  --ok-soft:       #e6f4e3;
+  --bad-soft:      #fbe6e6;
+  --nav-bg:        #1f2225;
+  --nav-hover:     #2b2f33;
+  --nav-border:    #33383d;
+  --nav-text:      #b9c0c7;
+  --nav-active:    #ffffff;
+  --mono:          'IBM Plex Mono', monospace;
+  --sans:          'IBM Plex Sans', sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:            #131517;
+    --bg-card:       #1b1e21;
+    --bg-hover:      #212529;
+    --border:        #2e3338;
+    --border-bright: #3a4046;
+    --text:          #e6e9ec;
+    --text-dim:      #97a1ab;
+    --text-faint:    #5c6670;
+    --accent:        #f7923d;
+    --accent-dim:    #3a2616;
+    --green:         #4caf50;
+    --red:           #e5534b;
+    --blue:          #5b9be0;
+    --ok-soft:       #16301a;
+    --bad-soft:      #3a1717;
+    --nav-bg:        #0e1012;
+    --nav-hover:     #1c1f22;
+    --nav-border:    #24282c;
+    color-scheme: dark;
+  }
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }

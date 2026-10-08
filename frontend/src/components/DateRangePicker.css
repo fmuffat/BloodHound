@@ -80,7 +80,7 @@
 }
 .drp-step.done {
   color: var(--text);
-  background: rgba(255,255,255,0.05);
+  background: var(--bg-hover);
   border: 1px solid var(--border);
   font-size: 10px;
 }
