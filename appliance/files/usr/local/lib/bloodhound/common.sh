@@ -79,10 +79,10 @@ set_web_password() {
   local pw="$1"
   (cd "$BH_DIR" && BH_NEWPW="$pw" docker compose exec -T -e BH_NEWPW backend python -c '
 import asyncio, os
-from app.services.auth import init_secret, change_credentials
+from app.services.auth import init_secret, ensure_user_password
 async def main():
     await init_secret()
-    await change_credentials("bloodhound", os.environ["BH_NEWPW"])
+    await ensure_user_password("bloodhound", os.environ["BH_NEWPW"])
 asyncio.run(main())
 ' && docker compose restart backend) >>"$LOG" 2>&1
 }

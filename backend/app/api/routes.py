@@ -777,11 +777,11 @@ def _client_ip(request: Request) -> str:
     return request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
 
 
-def _set_session_cookie(resp: JSONResponse, username: str) -> None:
+def _set_session_cookie(resp: JSONResponse, user: dict) -> None:
     from app.services.auth import create_token
     resp.set_cookie(
         key="bh_token",
-        value=create_token(username),
+        value=create_token(user),
         httponly=True,
         secure=True,
         max_age=86400,
@@ -789,10 +789,26 @@ def _set_session_cookie(resp: JSONResponse, username: str) -> None:
     )
 
 
+def _me(request: Request) -> dict:
+    """The signed-in account (set by AuthMiddleware)."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+def _require_admin(request: Request) -> dict:
+    user = _me(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Administrator only")
+    return user
+
+
 @router.post("/auth/login")
 async def login(request: Request, payload: dict = Body(...)):
     from app.services.auth import (
         verify_credentials, is_login_blocked, record_failed_login, clear_failed_logins,
+        record_login, public,
     )
     username = payload.get("username", "")
     password = payload.get("password", "")
@@ -801,13 +817,15 @@ async def login(request: Request, payload: dict = Body(...)):
     if await is_login_blocked(ip):
         raise HTTPException(status_code=429, detail="Too many failed attempts, try again later")
 
-    if not await verify_credentials(username, password):
+    user = await verify_credentials(username, password)
+    if not user:
         await record_failed_login(ip)
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     await clear_failed_logins(ip)
-    resp = JSONResponse({"status": "ok", "username": username})
-    _set_session_cookie(resp, username)
+    await record_login(user["username"])
+    resp = JSONResponse({"status": "ok", **public(user)})
+    _set_session_cookie(resp, user)
     return resp
 
 
@@ -819,43 +837,110 @@ async def logout():
 
 
 @router.get("/auth/me")
-async def get_me(bh_token: str = Cookie(default=None)):
-    from app.services.auth import verify_token, get_username
-    if not bh_token or not verify_token(bh_token):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    username = await get_username()
-    return {"username": username}
+async def get_me(request: Request):
+    from app.services.auth import public
+    return public(_me(request))
 
 
 @router.post("/auth/change-password")
-async def change_password(
-    payload: dict = Body(...),
-    bh_token: str = Cookie(default=None),
-):
-    from app.services.auth import verify_token, verify_credentials, change_credentials, get_username
-    if not bh_token or not verify_token(bh_token):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
+async def change_password(request: Request, payload: dict = Body(...)):
+    """Own password (any role). Closes this account's other sessions."""
+    from app.services.auth import verify_credentials, set_password
+    me = _me(request)
     current_password = payload.get("current_password", "")
-    new_password      = payload.get("new_password", "")
-    new_username      = payload.get("new_username", "")
+    new_password     = payload.get("new_password", "")
 
-    # Verify current password
-    current_username = await get_username()
-    if not await verify_credentials(current_username, current_password):
+    if not await verify_credentials(me["username"], current_password):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
-
-    username = new_username or current_username
+    if new_password == current_password:
+        raise HTTPException(status_code=400, detail="The new password must differ from the current one")
     try:
-        await change_credentials(username, new_password)
+        user = await set_password(me["username"], new_password, must_change=False)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Changing credentials rotates the JWT secret (all sessions invalidated),
-    # so hand the current user a fresh cookie signed with the new secret.
+    # The token version changed: give this browser a fresh session
     resp = JSONResponse({"status": "ok"})
-    _set_session_cookie(resp, username)
+    _set_session_cookie(resp, user)
     return resp
+
+
+# ── Accounts (administrators only) ────────────────────────────────────────────
+
+def _random_password() -> str:
+    import secrets
+    return secrets.token_urlsafe(12)
+
+
+@router.get("/users")
+async def users_list(request: Request):
+    from app.services.auth import list_users, public, ROLES
+    _require_admin(request)
+    return {"items": [public(u) for u in await list_users()], "roles": list(ROLES)}
+
+
+@router.post("/users")
+async def users_create(request: Request, payload: dict = Body(...)):
+    """New account with a random password, to change at first sign-in."""
+    from app.services.auth import create_user, public
+    _require_admin(request)
+    password = _random_password()
+    try:
+        user = await create_user((payload.get("username") or "").strip(), payload.get("role") or "viewer",
+                                 password, must_change=True)
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="This account already exists")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {**public(user), "password": password}
+
+
+async def _target(username: str) -> dict:
+    from app.services.auth import get_user
+    user = await get_user(username)
+    if not user:
+        raise HTTPException(status_code=404, detail="No such account")
+    return user
+
+
+@router.put("/users/{username}/role")
+async def users_set_role(username: str, request: Request, payload: dict = Body(...)):
+    from app.services.auth import set_role, count_admins, public
+    _require_admin(request)
+    user = await _target(username)
+    role = payload.get("role", "")
+    if user["role"] == "admin" and role != "admin" and await count_admins() <= 1:
+        raise HTTPException(status_code=409, detail="At least one administrator is required")
+    try:
+        return public(await set_role(username, role))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/users/{username}/reset-password")
+async def users_reset_password(username: str, request: Request):
+    """New random password, to change at next sign-in (closes the account's sessions)."""
+    from app.services.auth import set_password
+    me = _require_admin(request)
+    if username == me["username"]:
+        raise HTTPException(status_code=409, detail="Use Password to change your own password")
+    await _target(username)
+    password = _random_password()
+    await set_password(username, password, must_change=True)
+    return {"username": username, "password": password}
+
+
+@router.delete("/users/{username}")
+async def users_delete(username: str, request: Request):
+    from app.services.auth import delete_user, count_admins
+    me = _require_admin(request)
+    if username == me["username"]:
+        raise HTTPException(status_code=409, detail="You cannot delete your own account")
+    user = await _target(username)
+    if user["role"] == "admin" and await count_admins() <= 1:
+        raise HTTPException(status_code=409, detail="At least one administrator is required")
+    await delete_user(username)
+    return {"deleted": username}
 
 
 ERASE_LOG_KEY = "clients:erase_log"
@@ -869,8 +954,8 @@ async def _migrate_erase_log(r) -> None:
 
 @router.post("/clients/erase")
 async def erase_client(
+    request: Request,
     payload: dict = Body(...),
-    bh_token: str = Cookie(default=None),
 ):
     """
     Permanently erase all logs, history, and cached data for a single MAC
@@ -880,17 +965,15 @@ async def erase_client(
     UI confirmation dialog that could be clicked through accidentally.
     """
     import httpx
-    from app.services.auth import verify_token, verify_credentials, get_username
+    from app.services.auth import verify_credentials
 
-    if not bh_token or not verify_token(bh_token):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
+    me = _require_admin(request)
     mac = (payload.get("mac") or "").strip()
     password = payload.get("password", "")
     if not mac:
         raise HTTPException(status_code=400, detail="mac is required")
 
-    current_username = await get_username()
+    current_username = me["username"]
     if not await verify_credentials(current_username, password):
         raise HTTPException(status_code=401, detail="Password is incorrect")
 
@@ -951,11 +1034,9 @@ async def erase_client(
 
 
 @router.get("/clients/erase-log")
-async def erase_log(bh_token: str = Cookie(default=None)):
+async def erase_log(request: Request):
     """Return the client erasure audit trail (who erased what, and when)."""
-    from app.services.auth import verify_token
-    if not bh_token or not verify_token(bh_token):
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    _require_admin(request)
 
     r = await get_redis()
     await _migrate_erase_log(r)

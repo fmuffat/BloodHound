@@ -153,20 +153,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+API = "/api/v1"
+
+# Reachable while the account must still change its password
+MUST_CHANGE_OK = {f"{API}/auth/me", f"{API}/auth/change-password", f"{API}/auth/logout"}
+# Read-only accounts (role "viewer"): reading, searching and exporting only
+VIEWER_POST_OK = {
+    f"{API}/search",
+    f"{API}/investigation/export",
+    f"{API}/investigation/export-zip",
+    f"{API}/investigation/export-zip-event",
+    f"{API}/auth/logout",
+    f"{API}/auth/change-password",
+}
+# ...and no configuration, account management or erasure log, even to read
+VIEWER_GET_DENIED = (f"{API}/settings", f"{API}/users", f"{API}/clients/erase-log")
+VIEWER_GET_OK = {f"{API}/settings/preferences", f"{API}/settings/disk"}  # used by every page
+
+
+def viewer_allowed(method: str, path: str) -> bool:
+    if method in ("GET", "HEAD", "OPTIONS"):
+        return path in VIEWER_GET_OK or not path.startswith(VIEWER_GET_DENIED)
+    return method == "POST" and path in VIEWER_POST_OK
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Protect all API routes except /auth/login and /health."""
-    EXEMPT = {"/api/v1/auth/login", "/health"}
+    """Every API route needs a valid session (except login), and the
+    account's role decides what it may do. The account is made available to
+    the routes as request.state.user."""
+    EXEMPT = {f"{API}/auth/login", "/health"}
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in self.EXEMPT:
-            return await call_next(request)
-        if not request.url.path.startswith("/api/"):
+        path = request.url.path.rstrip("/") or "/"
+        if path in self.EXEMPT or not path.startswith("/api/"):
             return await call_next(request)
 
-        from app.services.auth import verify_token
-        token = request.cookies.get("bh_token")
-        if not token or not verify_token(token):
+        from app.services.auth import session_user
+        user = await session_user(request.cookies.get("bh_token"))
+        if not user:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        if user.get("must_change_password") and path not in MUST_CHANGE_OK:
+            return JSONResponse({"detail": "Password change required"}, status_code=403)
+        if user.get("role") != "admin" and not viewer_allowed(request.method, path):
+            return JSONResponse({"detail": "Read-only account"}, status_code=403)
+        request.state.user = user
         return await call_next(request)
 
 app.add_middleware(AuthMiddleware)
