@@ -2,7 +2,7 @@ import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { api } from '../utils/api'
 import { usePrefs } from '../utils/PrefsContext'
-import { useUser, isAdmin } from '../utils/UserContext'
+import { useUser, canManageLogs } from '../utils/UserContext'
 import './InvestigationPage.css'
 import './EventInvestigationPage.css'
 
@@ -155,7 +155,7 @@ function EraseClientModal({ mac, onConfirm, onClose, loading, error, result }) {
 }
 
 export default function EventInvestigationPage() {
-  const canErase = isAdmin(useUser())   // read-only accounts cannot erase
+  const canErase = canManageLogs(useUser())   // read-only accounts cannot erase
   const { mac } = useParams()
   const { timezone = 'Europe/Paris' } = usePrefs() || {}
   const [searchParams] = useSearchParams()

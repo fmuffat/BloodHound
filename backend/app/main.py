@@ -171,10 +171,30 @@ VIEWER_GET_DENIED = (f"{API}/settings", f"{API}/users", f"{API}/clients/erase-lo
 VIEWER_GET_OK = {f"{API}/settings/preferences", f"{API}/settings/disk"}  # used by every page
 
 
+# Logs managers (role "manager"): everything a viewer can, plus handling the
+# logs themselves — erase a client, the erasure log, retention and purge.
+# No server administration (platforms, SSL, preferences, accounts).
+MANAGER_EXTRA = {
+    ("POST", f"{API}/clients/erase"),
+    ("GET",  f"{API}/clients/erase-log"),
+    ("GET",  f"{API}/settings/retention"),
+    ("POST", f"{API}/settings/retention"),
+    ("POST", f"{API}/workers/purge-logs"),
+}
+
+
 def viewer_allowed(method: str, path: str) -> bool:
     if method in ("GET", "HEAD", "OPTIONS"):
         return path in VIEWER_GET_OK or not path.startswith(VIEWER_GET_DENIED)
     return method == "POST" and path in VIEWER_POST_OK
+
+
+def role_allowed(role: str, method: str, path: str) -> bool:
+    if role == "admin":
+        return True
+    if role == "manager" and (("GET" if method == "HEAD" else method), path) in MANAGER_EXTRA:
+        return True
+    return viewer_allowed(method, path)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -194,8 +214,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
         if user.get("must_change_password") and path not in MUST_CHANGE_OK:
             return JSONResponse({"detail": "Password change required"}, status_code=403)
-        if user.get("role") != "admin" and not viewer_allowed(request.method, path):
-            return JSONResponse({"detail": "Read-only account"}, status_code=403)
+        if not role_allowed(user.get("role", ""), request.method, path):
+            return JSONResponse({"detail": "Not allowed for your account"}, status_code=403)
         request.state.user = user
         return await call_next(request)
 

@@ -56,7 +56,8 @@ Priority: **P1** = needed soon, **P2** = strong value, **P3** = later.
       code) and remove any password from the installed unit file.
 - [x] P2 Force a password change at first web sign-in on non-appliance installs
       (default `bloodhound` / `password`).
-- [x] P1 Read-only accounts (admin / viewer roles, Settings → Users), as in sFlow Analytics.
+- [x] P1 Accounts with roles (Settings → Users), as in sFlow Analytics: administrator,
+      logs manager (erase / retention / purge, no server administration), read-only.
 - [ ] P2 Sign-in log (successes / failures, per account) in Settings → Users.
 - [ ] P3 Replace remaining `KEYS` calls (`/options`, `/status`) with `SCAN`.
 

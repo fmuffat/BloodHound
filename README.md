@@ -22,8 +22,9 @@ install required.
   showing full connection history
 - **Client identity enrichment** — hostname, OS, device type, username,
   and guest/sponsor information automatically merged into each log entry
-- **User accounts** — administrators and read-only users (search,
-  investigate and export only), managed in Settings → Users
+- **User accounts** — administrators, logs managers (search, export, erase
+  client logs, retention/purge — no server administration) and read-only
+  users, managed in Settings → Users
 - **Per-client erasure** — delete all logs and history of one client,
   with password confirmation and an audit trail
 - **Encrypted exports** — AES-256 password-protected ZIP, or CSV, for

@@ -804,6 +804,14 @@ def _require_admin(request: Request) -> dict:
     return user
 
 
+def _require_log_manager(request: Request) -> dict:
+    """Administrators and logs managers."""
+    user = _me(request)
+    if user.get("role") not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Logs managers and administrators only")
+    return user
+
+
 @router.post("/auth/login")
 async def login(request: Request, payload: dict = Body(...)):
     from app.services.auth import (
@@ -967,7 +975,7 @@ async def erase_client(
     import httpx
     from app.services.auth import verify_credentials
 
-    me = _require_admin(request)
+    me = _require_log_manager(request)
     mac = (payload.get("mac") or "").strip()
     password = payload.get("password", "")
     if not mac:
@@ -1036,7 +1044,7 @@ async def erase_client(
 @router.get("/clients/erase-log")
 async def erase_log(request: Request):
     """Return the client erasure audit trail (who erased what, and when)."""
-    _require_admin(request)
+    _require_log_manager(request)
 
     r = await get_redis()
     await _migrate_erase_log(r)

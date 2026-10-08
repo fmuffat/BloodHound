@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../utils/api'
 import { usePrefs } from '../utils/PrefsContext'
-import { useUser, isAdmin } from '../utils/UserContext'
+import { useUser, isAdmin, canManageLogs } from '../utils/UserContext'
 import UsersPanel from './UsersPanel'
 import './SettingsPage.css'
 
@@ -644,14 +644,35 @@ function SmartZonePanel({ onEnabledChange }) {
 
 export default function SettingsPage() {
   const user = useUser()
-  if (!isAdmin(user)) {
-    return (
-      <div className="settings-page">
-        <div className="settings-content"><SecurityPanel /></div>
+  if (isAdmin(user)) return <AdminSettingsPage />
+  return <LimitedSettingsPage logs={canManageLogs(user)} />
+}
+
+// Logs managers: Disk & Logs + Password. Read-only accounts: Password only.
+function LimitedSettingsPage({ logs }) {
+  const [tab, setTab] = useState(logs ? 'disk' : 'security')
+  return (
+    <div className="settings-page">
+      <div className="settings-layout">
+        <div className="settings-tabs">
+          {logs && (
+            <button className={`tab-item ${tab === 'disk' ? 'active' : ''}`} onClick={() => setTab('disk')}>
+              <span className="tab-icon">💾</span>
+              <div className="tab-info"><span className="tab-name">Disk & Logs</span></div>
+            </button>
+          )}
+          <button className={`tab-item ${tab === 'security' ? 'active' : ''}`} onClick={() => setTab('security')}>
+            <span className="tab-icon">🔒</span>
+            <div className="tab-info"><span className="tab-name">Password</span></div>
+          </button>
+        </div>
+        <div className="settings-content">
+          {tab === 'disk' && logs && <DiskPanel />}
+          {tab === 'security' && <SecurityPanel />}
+        </div>
       </div>
-    )
-  }
-  return <AdminSettingsPage />
+    </div>
+  )
 }
 
 function AdminSettingsPage() {

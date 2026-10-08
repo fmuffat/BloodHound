@@ -5,10 +5,13 @@ Accounts live in Redis:
   users                 SET of usernames
   user:{username}       JSON {password_hash, role, must_change_password,
                               created_at, last_login_at, token_version}
-Roles (same model as sFlow Analytics):
-  admin   everything
-  viewer  read-only: search, investigations, exports; no settings, no
-          erasure, no account management (can change their own password)
+Roles (inspired by sFlow Analytics):
+  admin    everything
+  manager  logs manager: what a viewer can, plus erase client logs,
+           retention and purge — no server administration
+  viewer   read-only: search, investigations, exports; no settings, no
+           erasure, no account management
+All roles can change their own password.
 
 Sessions are JWTs in an httpOnly cookie, signed with a per-appliance secret
 (auth:jwt_secret, generated on first start, never shipped). Each token
@@ -36,7 +39,7 @@ log = logging.getLogger(__name__)
 ALGORITHM      = "HS256"
 TOKEN_EXPIRE_H = 24
 
-ROLES = ("admin", "viewer")
+ROLES = ("admin", "manager", "viewer")
 DEFAULT_USERNAME = "bloodhound"
 DEFAULT_PASSWORD = "password"
 MIN_PASSWORD_LEN = 8

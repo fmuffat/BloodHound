@@ -9,9 +9,11 @@
    `admin` system account and the password of the web user `bloodhound`.
    It then installs the application (about 5 minutes).
 3. Open `https://<appliance-ip>/` and sign in as `bloodhound`.
-4. **Settings → Users**: create accounts for your colleagues — *Administrator*
-   or *Read-only* (search, investigations and exports only). Each new account
-   gets a random password and chooses its own at first sign-in.
+4. **Settings → Users**: create accounts for your colleagues — *Administrator*,
+   *Logs manager* or *Read-only* (search, investigations and exports only). Each new account
+   gets a random password and chooses its own at first sign-in. A *Logs
+   manager* can also erase a client's logs and manage retention, without
+   access to the server administration.
 5. **Settings**: choose the WiFi platform (Ruckus One, Unleashed or
    SmartZone) and enter its credentials.
 6. Point the syslog of the APs / controller to `<appliance-ip>`, UDP 514.

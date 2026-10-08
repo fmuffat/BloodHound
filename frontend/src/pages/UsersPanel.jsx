@@ -1,8 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../utils/api'
-import { useUser } from '../utils/UserContext'
-
-const ROLE_LABELS = { admin: 'Administrator', viewer: 'Read-only' }
+import { useUser, ROLE_LABELS } from '../utils/UserContext'
 
 const cell = { padding: '8px 10px', borderBottom: '1px solid var(--border)', fontSize: 12, textAlign: 'left' }
 const head = { ...cell, fontFamily: 'var(--mono)', fontSize: 10, textTransform: 'uppercase', color: 'var(--text-dim)' }
@@ -54,8 +52,10 @@ export default function UsersPanel() {
     <div className="settings-panel">
       <div className="panel-title">Users</div>
       <div className="panel-desc">
-        Administrators can do everything. Read-only accounts can search, investigate and
-        export, but cannot change settings, erase clients or manage accounts.
+        <strong>Administrator</strong>: everything. <strong>Logs manager</strong>: search,
+        investigate, export, erase client logs, retention and purge — no server administration
+        (platforms, SSL, preferences, accounts). <strong>Read-only</strong>: search, investigate
+        and export only.
         New and reset passwords are random and must be changed at the next sign-in.
       </div>
 

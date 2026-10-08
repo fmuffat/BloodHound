@@ -1,6 +1,7 @@
 import { Outlet, NavLink } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { api } from '../utils/api'
+import { ROLE_LABELS } from '../utils/UserContext'
 import './Layout.css'
 
 export default function Layout({ user, onLogout }) {
@@ -105,7 +106,7 @@ export default function Layout({ user, onLogout }) {
         <div className="topbar">
           <div className="topbar-user">
             <span className="topbar-username">{user.username}</span>
-            {user.role !== 'admin' && <span className="topbar-role">read-only</span>}
+            {user.role !== 'admin' && <span className="topbar-role">{ROLE_LABELS[user.role] || user.role}</span>}
             <button className="btn-logout" onClick={onLogout}>
               Sign out
             </button>

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
 import { usePrefs } from '../utils/PrefsContext'
-import { useUser, isAdmin } from '../utils/UserContext'
+import { useUser, canManageLogs } from '../utils/UserContext'
 import DateRangePicker from '../components/DateRangePicker'
 
 const PROTO_CLASS = { TCP: 'badge-tcp', UDP: 'badge-udp', ICMP: 'badge-icmp' }
@@ -97,7 +97,7 @@ function EraseClientModal({ mac, onConfirm, onClose, loading, error, result }) {
 }
 
 export default function InvestigationPage() {
-  const canErase = isAdmin(useUser())   // read-only accounts cannot erase
+  const canErase = canManageLogs(useUser())   // read-only accounts cannot erase
   const { mac } = useParams()
   const { timezone = 'Europe/Paris' } = usePrefs() || {}
   const navigate = useNavigate()
