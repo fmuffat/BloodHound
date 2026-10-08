@@ -11,9 +11,12 @@
 # Env: BH_STACK_DIR  directory of the running stack (docker compose)
 #                    default /opt/bloodhound/syslog-platform, else /opt/bloodhound
 #      SCHEME=light|dark   SCALE=1|2 (2 = sharper, for slides)   BASE_URL
+#      DEMO=1   presentation mode: real names, MACs, SSIDs, venues... replaced
+#               by consistent fictitious values in the browser (server data
+#               untouched), leak check, plus a simulated sponsored guest
 #
-# The captures show real data (client names, MACs, guest e-mails...): check
-# them before putting them in slides.
+# Without DEMO=1 the captures show real data (client names, MACs, guest
+# e-mails...): use DEMO=1 for slides.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT="$PWD/screenshots"
@@ -53,7 +56,7 @@ UI_PASSWORD="$(sed -n 2p "$CRED")"
 
 rm -f "$OUT"/*.png
 docker run --rm --network host --init \
-  -e SCHEME="${SCHEME:-light}" -e SCALE="${SCALE:-1}" \
+  -e SCHEME="${SCHEME:-light}" -e SCALE="${SCALE:-1}" -e DEMO="${DEMO:-0}" \
   -e UI_USER="$UI_USER" -e UI_PASSWORD="$UI_PASSWORD" \
   -v "$PWD/scripts/ui-screenshots.mjs:/work/ui-screenshots.mjs:ro" -v "$OUT:/out" \
   -v bloodhound-playwright-cache:/root/.cache -w /work node:22-bookworm \
