@@ -350,7 +350,7 @@ async def get_status():
         ruckus_last_sync=last_sync,
         ruckus_clients_cached=len(mac_keys),
         dns_pending=int(dns_pending or 0),
-        dns_cached=len([k for k in dns_keys if k != "dns:pending"]),
+        dns_cached=len([k for k in dns_keys if k not in ("dns:pending", "dns:config")]),
     )
 
 
@@ -708,6 +708,35 @@ async def get_disk_usage():
         "log_count":      total_docs,
         "indices":        graylog_indices,
     }
+
+
+# ── Reverse DNS (Settings → DNS) ──────────────────────────────────────────────
+
+@router.get("/settings/dns")
+async def get_dns_settings(request: Request):
+    from app.workers.dns_resolver import get_config, cache_stats
+    _require_admin(request)
+    return {**await get_config(), "cache": await cache_stats()}
+
+
+@router.post("/settings/dns")
+async def save_dns_settings(request: Request, payload: dict = Body(...)):
+    from app.workers.dns_resolver import save_config, cache_stats
+    _require_admin(request)
+    try:
+        cfg = await save_config(payload)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {**cfg, "cache": await cache_stats()}
+
+
+@router.post("/settings/dns/resolve")
+async def resolve_dns_now(request: Request):
+    """Run one resolution batch now (instead of waiting for the next cycle)."""
+    from app.workers.dns_resolver import cache_stats
+    _require_admin(request)
+    result = await resolve_batch()
+    return {**result, "cache": await cache_stats()}
 
 
 # ── User Preferences ──────────────────────────────────────────────────────────

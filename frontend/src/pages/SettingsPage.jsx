@@ -3,6 +3,7 @@ import { api } from '../utils/api'
 import { usePrefs } from '../utils/PrefsContext'
 import { useUser, isAdmin, canManageLogs } from '../utils/UserContext'
 import UsersPanel from './UsersPanel'
+import DnsPanel from './DnsPanel'
 import './SettingsPage.css'
 
 const REGIONS = [
@@ -835,6 +836,12 @@ function AdminSettingsPage() {
               <span className="tab-name">Preferences</span>
             </div>
           </button>
+          <button className={`tab-item ${activeTab === 'dns' ? 'active' : ''}`} onClick={() => setActiveTab('dns')}>
+            <span className="tab-icon">🔎</span>
+            <div className="tab-info">
+              <span className="tab-name">DNS</span>
+            </div>
+          </button>
           <button className={`tab-item ${activeTab === 'disk' ? 'active' : ''}`} onClick={() => setActiveTab('disk')}>
             <span className="tab-icon">💾</span>
             <div className="tab-info">
@@ -939,6 +946,7 @@ function AdminSettingsPage() {
           {activeTab === "smartzone" && <SmartZonePanel key={activePlatform} onEnabledChange={(v) => syncPlatformExclusivity('smartzone', v)} />}
 
           {activeTab === 'preferences' && <PreferencesPanel />}
+          {activeTab === 'dns' && <DnsPanel />}
           {activeTab === 'disk' && <DiskPanel />}
           {activeTab === 'security' && <SecurityPanel />}
           {activeTab === 'users' && <UsersPanel />}

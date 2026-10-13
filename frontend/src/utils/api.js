@@ -63,6 +63,11 @@ export const api = {
   deleteUser: (username)         => req('DELETE', `/users/${encodeURIComponent(username)}`),
   listLogins: (failedOnly)       => req('GET',    '/users/logins', null, { limit: 200, failed_only: failedOnly ? 'true' : null }),
 
+  // Reverse DNS (administrators only)
+  getDnsSettings: ()             => req('GET',  '/settings/dns'),
+  saveDnsSettings: (p)           => req('POST', '/settings/dns', p),
+  resolveDnsNow: ()              => req('POST', '/settings/dns/resolve'),
+
   // MAC timeline
   getMacTimeline: (mac) => req('GET', `/lookup/mac/${mac}/timeline`),
 
